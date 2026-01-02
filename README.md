@@ -1,2 +1,2 @@
 # HypoXPy
-A comprehensive Python interface for hypocenter location codes
+A comprehensive modulized Python interface for hypocenter location codes
