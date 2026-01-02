@@ -1,5 +1,5 @@
 # HypoXPy
-A comprehensive modulated Python interface for hypocenter location codes
+A modulated comprehensive *Python* interface for hypocenter location codes
 
 ![plot1](/figs/HypoXPy_logo.png)
 
