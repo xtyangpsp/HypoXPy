@@ -1,8 +1,6 @@
 # HypoXPy
 A modularized comprehensive *Python* interface for hypocenter location codes
 
-![plot1](/figs/HypoXPy_logo.png)
-
 This package doesn't intend to be a detailed documentation of each earthquake location method and code. Instead, we focus on providing a streamlined, user-friendly, and modularized interface for a collection of computer codes for earthquake location or relocation. The ultimate goal is to make this package a one-stop shop with a comprehensive collection of methods.
 
 The logic of this package is heavily inspired by, and modified and simplified from Hypo-Interface-Py (https://github.com/YijianZhou/Hypo-Interface-Py). We acknowledge the developers of Hypo-Interface-Py.
@@ -51,6 +49,3 @@ Klein, Fred W. 2002. User’s Guide to HYPOINVERSE-2000, a Fortran Program to So
 Waldhauser, Felix, and William L. Ellsworth, A double-difference earthquake location algorithm: Method and application to the northern Hayward fault, California, Bull. Seism. Soc. Am. 90, 1353-1368, 2000.
 
 Waldhauser, Felix, hypoDD -- A program to compute double-difference hypocenter locations, U.S. Geological Survey Open-File Report 01-113, 2001.
-
-
-
