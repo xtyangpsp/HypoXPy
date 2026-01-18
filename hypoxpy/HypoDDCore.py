@@ -4,37 +4,30 @@
     Or use the copy included in this python interface package.
 """
 from pathlib import Path
-import os,shutil, glob
+import os,shutil, glob, subprocess, warnings
 import numpy as np
 from obspy import UTCDateTime
-from pathlib import Path
-import subprocess
-import warnings
 warnings.filterwarnings("ignore")
 
-def cat_files(pattern, fout):
+def reformat_stationfile(fin,fout):
+    """ 
+    Reformat input station file for HypoDD
+    """
+    foutid=open(fout,'w')
     
-    with open(fout, 'w') as out:
-        for fname in sorted(glob.glob(pattern)):
-            with open(fname) as f:
-                shutil.copyfileobj(f, out)
-
-# read fpha with evid
-def load_phasedata(fin):
-    pha_dict = {}
-    evid = None
-
-    with open(fin) as f:
-        for line in f:
-            codes = line.split(',')
-            if len(codes[0]) >= 14:
-                evid = codes[-1].strip()
-                pha_dict[evid] = []
-            elif evid is not None:
-                pha_dict[evid].append(line)
-
-    return pha_dict
-
+    done_list = []
+    f=open(fin); 
+    lines=f.readlines(); 
+    f.close()
+    for line in lines:
+        codes = line.split(',')
+        net, sta = codes[0].split('.')
+        if sta in done_list: continue
+        lat, lon = [float(code) for code in codes[1:3]]
+        foutid.write('{} {} {}\n'.format(sta, lat, lon))
+        done_list.append(sta)
+    foutid.close()
+#
 #
 def run_ph2dt(config):
     """
@@ -69,7 +62,7 @@ def run_ph2dt(config):
 
     with open(out_file, 'w') as f:
         subprocess.run(
-            [f'{config.binpath}/ph2dt', ph2dt_inp],
+            [f'{config.bin_ph2dt}', ph2dt_inp],
             stdout=f,
             stderr=subprocess.STDOUT,
             check=False
@@ -95,27 +88,9 @@ def run_ph2dt(config):
 
     print(f"[INFO] ph2dt completed: {out_file}")
 
-def reformat_stationfile(fin,fout):
-    """ 
-    Reformat input station file for HypoDD
-    """
-    foutid=open(fout,'w')
-    
-    done_list = []
-    f=open(fin); 
-    lines=f.readlines(); 
-    f.close()
-    for line in lines:
-        codes = line.split(',')
-        net, sta = codes[0].split('.')
-        if sta in done_list: continue
-        lat, lon = [float(code) for code in codes[1:3]]
-        foutid.write('{} {} {}\n'.format(sta, lat, lon))
-        done_list.append(sta)
-    foutid.close()
-#
+    return out_file
 
-# grid params
+# 
 def reformat_phasefile(config, phase_file_in,phase_file_out=None, out_dir=None,
                        time_range=None,lat_range=None,lon_range=None):
     """
@@ -161,8 +136,6 @@ def reformat_phasefile(config, phase_file_in,phase_file_out=None, out_dir=None,
         lon_min, lon_max = lon_range
     else:
         lon_min, lon_max = -180.0, 180.0
-
-    outfile = os.path.join(fout_dir, f"{config.namebase}.pha")
 
     evid_list = []
 
@@ -252,58 +225,132 @@ def reformat_phasefile(config, phase_file_in,phase_file_out=None, out_dir=None,
 #
 #
 class HypoDDConfig(object):
-  def __init__(self,binpath=None,indir='input',outdir='output',namebase=None,station_file=None, phase_file=None,
+    """
+    Configuration class for HypoDD.
+    =============================
+    Parameters
+    ----------
+    binpath : str
+        Path to hypoDD binaries. Default: system PATH)
+    indir : str
+        Input directory. Default: 'input'
+    outdir : str
+        Output directory. Default: 'output'
+    namebase : str
+        Base name for input/output files.
+    station_file : str
+        Path to station file (after reformatting for HypoDD).
+    phase_file : str
+        Path to phase file (after reformatting for HypoDD).
+    dep_corr : float
+        Depth correction to avoid air quakes. Default: 5 km.
+    hypodd_inp_template : str
+        Template file for hypoDD input.inp
+    ph2dt_inp_template : str
+        Template file for ph2dt input.inp
+    =============================   
+    Operations
+    ----------
+    run(pha_dict)
+        Run HypoDD once for the entire dataset.
+    
+    """
+    def __init__(self,binpath=None,indir='input',outdir='output',namebase=None,station_file=None, phase_file=None,
                dep_corr = None,hypodd_inp_template='hypoDD.inp',ph2dt_inp_template='ph2dt.inp'):
 
-    # i/o paths
-    # phase_file: needs to be the file after reformatted to be used by ph2dt and hypoDD.
-    self.binpath = binpath
-    self.indir = indir
-    self.outdir = outdir
-    self.namebase = namebase
-    self.station_file = station_file
-    if phase_file is not None:
-        self.phase_file = phase_file
-    else:
-        self.phase_file = f'{self.indir}/{self.namebase}.pha' #this is the phase file after reformatting to be used by ph2dt and hypoDD.
-    self.hypodd_inp_template = hypodd_inp_template
-    self.ph2dt_inp_template = ph2dt_inp_template
-    # run ph2dt & hypoDD 
-    self.dep_corr = dep_corr or 5 # avoid air quake, modify velo_mod accordingly
+        # i/o paths
+        # phase_file: needs to be the file after reformatted to be used by ph2dt and hypoDD.
+        if binpath is None:
+            self.bin_hypodd = 'hypoDD' # default path to hypoDD binaries, assuming it is in the system PATH
+            self.bin_ph2dt = 'ph2dt'
+        else:
+            self.bin_hypodd = os.path.join(binpath,'hypoDD')
+            self.bin_ph2dt = os.path.join(binpath,'ph2dt')
+        self.binpath = binpath
+        self.indir = indir
+        self.outdir = outdir
+        self.namebase = namebase
+        self.station_file = station_file
+        if phase_file is not None:
+            self.phase_file = phase_file
+        else:
+            self.phase_file = f'{self.indir}/{self.namebase}.pha' #this is the phase file after reformatting to be used by ph2dt and hypoDD.
+        self.hypodd_inp_template = hypodd_inp_template
+        self.ph2dt_inp_template = ph2dt_inp_template
+        # run ph2dt & hypoDD 
+        self.dep_corr = dep_corr or 5 # avoid air quake, modify velo_mod accordingly
 
-    # create output directory if not exists yet
-    if not os.path.exists(indir):
-        os.makedirs(indir)
-    if not os.path.exists(outdir):
-      os.makedirs(outdir)
-#
-class HypoDDCore(object):
+        # create output directory if not exists yet
+        if not os.path.exists(indir):
+            os.makedirs(indir)
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+        #
+        #
+
     """
     Core runner for HypoDD (single-run version)
-
-    Responsibilities:
-      - prepare HypoDD input files
-      - run hypoDD once for the entire dataset
-      - no grids, no parallelism, no merging
     """
-
-    def __init__(self, config, evid_list, pha_dict):
-        self.config = config
-        self.evid_list = evid_list
-        self.pha_dict = pha_dict
-
-        self.binpath = Path(self.config.binpath)
-        self.outdir = Path(self.config.outdir)
-        self.outdir.mkdir(parents=True, exist_ok=True)
+    def help(self):
+        print("HypoDDConfig object:")
+        print("  Attributes:")
+        print("    binpath: path to hypoDD binaries")
+        print("    indir: input directory")
+        print("    outdir: output directory")
+        print("    namebase: base name for input/output files")
+        print("    station_file: path to station file (after reformatting for HypoDD)")
+        print("    phase_file: path to phase file (after reformatting for HypoDD)")
+        print("    dep_corr: depth correction to avoid air quakes")
+        print("    hypodd_inp_template: template file for hypoDD input.inp")
+        print("    ph2dt_inp_template: template file for ph2dt input.inp")
+        print("  Methods:")
+        print("    run(pha_dict): Run HypoDD once for the entire dataset.")
+        print("    help(): Print this help message.")
 
     # --------------------------------------------------
     # Public API
     # --------------------------------------------------
-    def run(self):
-        """Run HypoDD once for the entire dataset"""
+    def run(self,pha_dict,cleanup=True):
+        """
+        Run HypoDD once for the entire dataset. 
+
+        Workflow:
+            1. run ph2dt
+            2. write hypoDD input files
+            3. run hypoDD core
+            4. collect outputs
+
+        Parameters
+        ----------
+        pha_dict : dict
+            Dictionary of phase data, keyed by event ID.
+        cleanup : bool
+            Whether to clean up intermediate files. Default: True.
+        Returns
+        -------
+        outfile_catalog : str
+            Path to output catalog file.
+        outfile_phase : str
+            Path to output phase file.
+        outfile_phase_full : str
+            Path to full output phase file.
+        """
+
+        # -------------------------------
+        # run ph2dt
+        # -------------------------------
+        run_ph2dt(self)
+
         self._write_input_files()
-        self._run_hypodd()
-        self._collect_outputs()
+        self._run_hypodd_core()
+        self._collect_outputs(pha_dict)
+
+        # cleanup intermediate files
+        if cleanup:
+            reloc_grids = glob.glob(f'{self.outdir}/hypoDD_{self.namebase}.reloc.*')
+            for f in reloc_grids:
+                if os.path.exists(f):
+                    os.unlink(f)
 
     # --------------------------------------------------
     # Internal helpers
@@ -314,22 +361,22 @@ class HypoDDCore(object):
         Assumes ph2dt has already been executed.
         """
         # Input file names
-        os.makedirs('input', exist_ok=True)
-        fout = open('input/hypoDD_%s.inp'%(self.config.namebase),'w')
-        f=open(self.config.hypodd_inp_template); lines=f.readlines(); f.close()
+        os.makedirs(self.indir, exist_ok=True)
+        fout = open(f'{self.indir}/hypoDD_{self.namebase}.inp','w')
+        f=open(self.hypodd_inp_template); lines=f.readlines(); f.close()
         for line in lines:
-            if 'dt.ct' in line: line = 'input/dt.ct \n'
-            if 'event.dat' in line: line = 'input/event.dat \n'
-            if 'hypoDD.reloc' in line: line = 'output/hypoDD_%s.reloc \n'%(self.config.namebase)
+            if 'dt.ct' in line: line = f'{self.indir}/dt.ct \n'
+            if 'event.dat' in line: line = f'{self.indir}/event.dat \n'
+            if 'hypoDD.reloc' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.reloc \n'
             fout.write(line)
         fout.close()
 
-    def _run_hypodd(self):
+    def _run_hypodd_core(self):
         """Execute HypoDD binary"""
-        exe = self.binpath / 'hypoDD'
-        inp = Path('input') / f'hypoDD_{self.config.namebase}.inp'
+        exe = self.bin_hypodd
+        inp = Path(self.indir) / f'hypoDD_{self.namebase}.inp'
 
-        if not exe.exists():
+        if not os.path.exists(exe):
             raise FileNotFoundError(f"hypoDD binary not found: {exe}")
 
         cmd = [str(exe), str(inp)]
@@ -346,11 +393,11 @@ class HypoDDCore(object):
             )
 
         # Write stdout log
-        logf = self.outdir / f'{self.config.namebase}_hypoDD.log'
+        logf = os.path.join(self.outdir, f'{self.namebase}_hypoDD.log')
         with open(logf, 'w') as f:
             f.write(str(proc.stdout))
 
-    def _collect_outputs(self):
+    def _collect_outputs(self,pha_dict):
         """
         Collect and clean up HypoDD outputs.
         Produces:
@@ -358,12 +405,16 @@ class HypoDDCore(object):
           - {outdir}/{namebase}.pha
           - {outdir}/{namebase}_full.pha
         """
+        evid_list = list(pha_dict.keys())
+        outfile_catalog = f'{self.outdir}/{self.namebase}.ctlg'
+        outfile_phase = f'{self.outdir}/{self.namebase}.pha'
+        outfile_phase_full = f'{self.outdir}/{self.namebase}_full.pha'
         # clean up outputs
-        with open(f'{self.config.outdir}/{self.config.namebase}.ctlg', 'w') as out_ctlg, \
-            open(f'{self.config.outdir}/{self.config.namebase}.pha', 'w') as out_pha, \
-            open(f'{self.config.outdir}/{self.config.namebase}_full.pha', 'w') as out_pha_full:
+        with open(outfile_catalog, 'w') as out_ctlg, \
+            open(outfile_phase, 'w') as out_pha, \
+            open(outfile_phase_full, 'w') as out_pha_full:
 
-            freloc = f'{self.config.outdir}/hypoDD_{self.config.namebase}.reloc'
+            freloc = f'{self.outdir}/hypoDD_{self.namebase}.reloc'
             if not os.path.exists(freloc):
                 return
 
@@ -374,14 +425,14 @@ class HypoDDCore(object):
                 codes = line.split()
                 evid = codes[0]
 
-                if int(evid) not in self.evid_list:
+                if int(evid) not in evid_list:
                     continue
 
-                pha_lines = self.pha_dict[evid]
+                pha_lines = pha_dict[evid]
                 # location
                 lat, lon, dep = codes[1:4]
                 try:
-                    dep = round(float(dep) - self.config.dep_corr, 2)
+                    dep = round(float(dep) - self.dep_corr, 2)
                     mag = float(codes[16])
                 except Exception:
                     continue
@@ -401,4 +452,9 @@ class HypoDDCore(object):
                 for pha_line in pha_lines:
                     out_pha.write(pha_line)
                     out_pha_full.write(pha_line)
+        #
+        print(f"[INFO] Wrote output catalog: {outfile_catalog}")
+        print(f"[INFO] Wrote output phase file: {outfile_phase}")
+        print(f"[INFO] Wrote full output phase file: {outfile_phase_full}")
 
+        return outfile_catalog, outfile_phase, outfile_phase_full
