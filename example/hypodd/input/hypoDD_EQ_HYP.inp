@@ -16,7 +16,7 @@ input/station.dat
 * original locations:
 output/hypoDD.loc
 * relocations:
-output/hypoDD_eq_ct.reloc 
+output/hypoDD_EQ_HYP.reloc 
 * station information:
 output/hypoDD.sta
 * residual information:

@@ -253,7 +253,7 @@ def reformat_stainfo_hypodd(infile,outfile,informat="csv",combine_net_sta=True,e
                 f"{sta_name:<7} {lat:9.4f} {lon:10.4f} {ele:7.3f}\n"
             )
 #
-def get_template_list(basename):
+def get_template_list(basename,pattern='',fullpath=False):
     """ 
     Get list of available template files for a specified basename.
     ==========PARAMETERS=============
@@ -267,13 +267,16 @@ def get_template_list(basename):
                          %(basename,str(basename_list())))
     
     templatedir=impresources.files(templates)
-    templatelist=get_filelist(templatedir,pattern='%s_template_'%(basename))
-    templatetail=[]
-    for tf in templatelist:
-        ftail=os.path.split(tf)[1]
-        templatetail.append(ftail)
-    #
-    return(templatetail)
+    templatelist=get_filelist(templatedir,pattern='%s_template_%s'%(basename,pattern),sort=True)
+    if fullpath:
+        return templatelist
+    else:
+        templatetail=[]
+        for tf in templatelist:
+            ftail=os.path.split(tf)[1]
+            templatetail.append(ftail)
+        #
+        return templatetail
 #
 def load_template(template_name=None):
     """

@@ -7,11 +7,19 @@ from pathlib import Path
 import os,shutil, glob, subprocess, warnings
 import numpy as np
 from obspy import UTCDateTime
+from hypoxpy import utils
 warnings.filterwarnings("ignore")
 
 def reformat_stationfile(fin,fout):
     """ 
-    Reformat input station file for HypoDD
+    Reformat input station file for HypoDD.
+    We use net.sta, lat, lon format, instead of sta, lat, lon, to keep network info.
+    Parameters
+    ----------
+    fin : str
+        Input station file path.
+    fout : str
+        Output station file path.   
     """
     foutid=open(fout,'w')
     
@@ -21,11 +29,11 @@ def reformat_stationfile(fin,fout):
     f.close()
     for line in lines:
         codes = line.split(',')
-        net, sta = codes[0].split('.')
-        if sta in done_list: continue
+        netsta = codes[0].strip()
+        if netsta in done_list: continue
         lat, lon = [float(code) for code in codes[1:3]]
-        foutid.write('{} {} {}\n'.format(sta, lat, lon))
-        done_list.append(sta)
+        foutid.write('{} {} {}\n'.format(netsta, lat, lon))
+        done_list.append(netsta)
     foutid.close()
 #
 #
@@ -36,7 +44,7 @@ def run_ph2dt(config):
     config: HypoDDConfig object
     """
 
-    print("run ph2dt (single run)")
+    print("running ph2dt...")
 
     # --------------------------------------------------
     # Prepare input phase file
@@ -194,7 +202,7 @@ def reformat_phasefile(config, phase_file_in,phase_file_out=None, out_dir=None,
                 if not write_event:
                     continue
 
-                sta = codes[0].split('.')[1]
+                netsta = codes[0].strip()
                 wp, ws = 1.0, 1.0
 
                 # P pick
@@ -202,8 +210,8 @@ def reformat_phasefile(config, phase_file_in,phase_file_out=None, out_dir=None,
                     tp = UTCDateTime(codes[1])
                     ttp = tp - ot
                     fout.write(
-                        '{:<5}{}{:6.3f}  {:6.3f}   P\n'.format(
-                            sta, ' ' * 6, ttp, wp
+                        '{:<7}{}{:6.3f}  {:6.3f}   P\n'.format(
+                            netsta, ' ' * 6, ttp, wp
                         )
                     )
 
@@ -212,8 +220,8 @@ def reformat_phasefile(config, phase_file_in,phase_file_out=None, out_dir=None,
                     ts = UTCDateTime(codes[2])
                     tts = ts - ot
                     fout.write(
-                        '{:<5}{}{:6.3f}  {:6.3f}   S\n'.format(
-                            sta, ' ' * 6, tts, ws
+                        '{:<7}{}{:6.3f}  {:6.3f}   S\n'.format(
+                            netsta, ' ' * 6, tts, ws
                         )
                     )
 
@@ -223,6 +231,34 @@ def reformat_phasefile(config, phase_file_in,phase_file_out=None, out_dir=None,
 
     return outfile, np.array(evid_list)
 #
+def update_phasefile_with_reloc(infile,catalog,outfile):
+    """
+    Update phase file with relocated event info from catalog.
+    Parameters
+    ----------
+    infile : str
+        Input phase file path.
+    catalog : str
+        Catalog file path with relocated event info.
+    outfile : str
+        Output phase file path.
+    """
+    #load input phase data
+    pha_dict = utils.load_hypo_phasedata(infile)
+
+    # read catalog
+    with open(catalog) as f:
+        evlines = f.readlines()
+    
+    # collect output catalog and phase file
+    with open(outfile, 'w') as out_pha:
+        for evline in evlines:
+            evid = evline.strip().split(',')[-1]
+            out_pha.write(evline)
+
+            for pha_line in pha_dict[evid]:
+                out_pha.write(pha_line)
+        #
 #
 class HypoDDConfig(object):
     """
@@ -251,12 +287,16 @@ class HypoDDConfig(object):
     =============================   
     Operations
     ----------
-    run(pha_dict)
+    run()
         Run HypoDD once for the entire dataset.
-    
+    collect_outputs(pha_dict,cleanup=True)
+        Collect and clean up HypoDD outputs.
+    help()
+        Print help message.
+    =============================
     """
     def __init__(self,binpath=None,indir='input',outdir='output',namebase=None,station_file=None, phase_file=None,
-               dep_corr = None,hypodd_inp_template='hypoDD.inp',ph2dt_inp_template='ph2dt.inp'):
+               dep_corr = None,hypodd_inp_template=None,ph2dt_inp_template=None):
 
         # i/o paths
         # phase_file: needs to be the file after reformatted to be used by ph2dt and hypoDD.
@@ -277,17 +317,25 @@ class HypoDDConfig(object):
             self.phase_file = f'{self.indir}/{self.namebase}.pha' #this is the phase file after reformatting to be used by ph2dt and hypoDD.
         self.hypodd_inp_template = hypodd_inp_template
         self.ph2dt_inp_template = ph2dt_inp_template
+
+        if self.hypodd_inp_template is None or self.ph2dt_inp_template is None:
+            if self.hypodd_inp_template is None:
+                self.hypodd_inp_template = f'{self.indir}/template_hypodd_par.inp'
+                template_name = utils.get_template_list('hypodd',pattern='hypodd_par.inp',fullpath=True)[0]
+                shutil.copyfile(template_name,self.hypodd_inp_template)
+            if self.ph2dt_inp_template is None:
+                self.ph2dt_inp_template = f'{self.indir}/template_ph2dt_par.inp'
+                template_name = utils.get_template_list('hypodd',pattern='ph2dt_par.inp',fullpath=True)[0]
+                shutil.copyfile(template_name,self.ph2dt_inp_template)
+            
         # run ph2dt & hypoDD 
         self.dep_corr = dep_corr or 5 # avoid air quake, modify velo_mod accordingly
 
         # create output directory if not exists yet
-        if not os.path.exists(indir):
-            os.makedirs(indir)
-        if not os.path.exists(outdir):
-            os.makedirs(outdir)
-        #
-        #
-
+        if not os.path.exists(self.indir):
+            os.makedirs(self.indir)
+        if not os.path.exists(self.outdir):
+            os.makedirs(self.outdir)
     """
     Core runner for HypoDD (single-run version)
     """
@@ -304,13 +352,13 @@ class HypoDDConfig(object):
         print("    hypodd_inp_template: template file for hypoDD input.inp")
         print("    ph2dt_inp_template: template file for ph2dt input.inp")
         print("  Methods:")
-        print("    run(pha_dict): Run HypoDD once for the entire dataset.")
+        print("    run(cleanup): Run HypoDD once for the entire dataset.")
         print("    help(): Print this help message.")
 
     # --------------------------------------------------
     # Public API
     # --------------------------------------------------
-    def run(self,pha_dict,cleanup=True):
+    def run(self, cleanup=True):
         """
         Run HypoDD once for the entire dataset. 
 
@@ -319,21 +367,16 @@ class HypoDDConfig(object):
             2. write hypoDD input files
             3. run hypoDD core
             4. collect outputs
-
+ 
         Parameters
         ----------
-        pha_dict : dict
-            Dictionary of phase data, keyed by event ID.
         cleanup : bool
             Whether to clean up intermediate files. Default: True.
+        =============
         Returns
         -------
         outfile_catalog : str
             Path to output catalog file.
-        outfile_phase : str
-            Path to output phase file.
-        outfile_phase_full : str
-            Path to full output phase file.
         """
 
         # -------------------------------
@@ -343,14 +386,10 @@ class HypoDDConfig(object):
 
         self._write_input_files()
         self._run_hypodd_core()
-        self._collect_outputs(pha_dict)
+        outcatalog = self._collect_outputs(cleanup=cleanup)
 
-        # cleanup intermediate files
-        if cleanup:
-            reloc_grids = glob.glob(f'{self.outdir}/hypoDD_{self.namebase}.reloc.*')
-            for f in reloc_grids:
-                if os.path.exists(f):
-                    os.unlink(f)
+        return outcatalog
+        #return outcatalog
 
     # --------------------------------------------------
     # Internal helpers
@@ -397,22 +436,24 @@ class HypoDDConfig(object):
         with open(logf, 'w') as f:
             f.write(str(proc.stdout))
 
-    def _collect_outputs(self,pha_dict):
+    def _collect_outputs(self,cleanup=True):
         """
         Collect and clean up HypoDD outputs.
-        Produces:
-          - {outdir}/{namebase}.ctlg
-          - {outdir}/{namebase}.pha
-          - {outdir}/{namebase}_full.pha
+
+        Parameters
+        ----------
+        pha_dict : dict
+            Dictionary of phase lines keyed by event ID.
+        cleanup : bool
+            Whether to clean up intermediate files. Default: True.
+        Returns
+        -------
+        outfile_catalog : str
+            Path to output catalog file.
         """
-        evid_list = list(pha_dict.keys())
         outfile_catalog = f'{self.outdir}/{self.namebase}.ctlg'
-        outfile_phase = f'{self.outdir}/{self.namebase}.pha'
-        outfile_phase_full = f'{self.outdir}/{self.namebase}_full.pha'
-        # clean up outputs
-        with open(outfile_catalog, 'w') as out_ctlg, \
-            open(outfile_phase, 'w') as out_pha, \
-            open(outfile_phase_full, 'w') as out_pha_full:
+        # collect output catalog and phase file
+        with open(outfile_catalog, 'w') as out_ctlg:
 
             freloc = f'{self.outdir}/hypoDD_{self.namebase}.reloc'
             if not os.path.exists(freloc):
@@ -425,10 +466,6 @@ class HypoDDConfig(object):
                 codes = line.split()
                 evid = codes[0]
 
-                if int(evid) not in evid_list:
-                    continue
-
-                pha_lines = pha_dict[evid]
                 # location
                 lat, lon, dep = codes[1:4]
                 try:
@@ -445,16 +482,19 @@ class HypoDDConfig(object):
                     f'{year}{mon:0>2}{day:0>2}{hour:0>2}{mnt:0>2}{sec:0>6}'
                 )
 
-                out_ctlg.write(f'{ot},{lat},{lon},{dep},{mag}\n')
-                out_pha.write(f'{ot},{lat},{lon},{dep},{mag}\n')
-                out_pha_full.write(f'{ot},{lat},{lon},{dep},{mag},{evid}\n')
-
-                for pha_line in pha_lines:
-                    out_pha.write(pha_line)
-                    out_pha_full.write(pha_line)
+                out_ctlg.write(f'{ot},{lat},{lon},{dep},{mag},{evid}\n')
         #
-        print(f"[INFO] Wrote output catalog: {outfile_catalog}")
-        print(f"[INFO] Wrote output phase file: {outfile_phase}")
-        print(f"[INFO] Wrote full output phase file: {outfile_phase_full}")
+        print(f"[INFO] Wrote output catalog: {outfile_catalog} with {len(lines)} events.")  
 
-        return outfile_catalog, outfile_phase, outfile_phase_full
+        #
+        """Remove intermediate files generated by HypoDD."""    
+        if cleanup:
+            # cleanup intermediate files
+            reloc_grids = glob.glob(f'{self.outdir}/hypoDD_{self.namebase}.reloc.*')
+            for f in reloc_grids:
+                if os.path.exists(f):
+                    os.remove(f)
+            print("[INFO] Cleaned up intermediate files.")
+
+        return outfile_catalog
+
