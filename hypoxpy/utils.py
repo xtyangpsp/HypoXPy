@@ -1,8 +1,10 @@
 #This file contains utility functions for the package.
 import pandas as pd
+import numpy as np
 import os,json,shutil,glob,time
 from importlib import resources as impresources
 from hypoxpy import templates
+from obspy import UTCDateTime
 import warnings
 from tqdm import tqdm
 from datetime import datetime
@@ -230,6 +232,7 @@ def reformat_stainfo_hypodd(infile,outfile,informat="csv",combine_net_sta=True,e
         os.makedirs(fhead)
 
     # ---- write station.dat ----
+    donelist=[] #to avoid duplicate stations.
     with open(outfile, "w") as fout:
         for _, row in indata.iterrows():
 
@@ -240,7 +243,9 @@ def reformat_stainfo_hypodd(infile,outfile,informat="csv",combine_net_sta=True,e
                 sta_name = f"{net}.{sta}"
             else:
                 sta_name = sta
-
+            if sta_name in donelist:
+                continue
+            donelist.append(sta_name)
             lat = float(row["latitude"])
             lon = float(row["longitude"])
             ele = float(row["elevation"])
@@ -253,6 +258,31 @@ def reformat_stainfo_hypodd(infile,outfile,informat="csv",combine_net_sta=True,e
                 f"{sta_name:<7} {lat:9.4f} {lon:10.4f} {ele:7.3f}\n"
             )
 #
+def reformat_stainfo_legacy(fin,fout):
+    """ 
+    Reformat input station file for HypoDD. This is a legacy function moidified from hypo-interface-py. I kept it here for backward compatibility.
+    We use net.sta, lat, lon format, instead of sta, lat, lon, to keep network info.
+    Parameters
+    ----------
+    fin : str
+        Input station file path.
+    fout : str
+        Output station file path.   
+    """
+    foutid=open(fout,'w')
+    
+    done_list = []
+    f=open(fin); 
+    lines=f.readlines(); 
+    f.close()
+    for line in lines:
+        codes = line.split(',')
+        netsta = codes[0].strip()
+        if netsta in done_list: continue
+        lat, lon = [float(code) for code in codes[1:3]]
+        foutid.write('{} {} {}\n'.format(netsta, lat, lon))
+        done_list.append(netsta)
+    foutid.close()
 def get_template_list(basename,pattern='',fullpath=False):
     """ 
     Get list of available template files for a specified basename.
@@ -354,32 +384,74 @@ def load_hypo_phasedata(fin,separator=','):
             elif evid is not None:
                 pha_dict[evid].append(line)
     return pha_dict
+#
+def resolve_event_depth_column(df,label=None):
+    """
+    Resolve depth column and unit automatically.
+
+    Returns
+    -------
+    label : str
+        Column name to use
+    scale : float
+        Scale factor to convert to km
+    """
+    # 1. User explicitly specifies
+    if label is not None:
+        if label not in df.columns:
+            raise KeyError(f"Depth column '{label}' not found in dataframe.")
+        return label, 1.0
+
+    # 2. Column name based detection
+    if "depth_km" in df.columns:
+        return "depth_km", 1.0
+
+    if "depth(m)" in df.columns:
+        return "depth(m)", 1e-3
+
+    if "depth_m" in df.columns:
+        return "depth_m", 1e-3
+
+    if "depth" in df.columns:
+        # 3. Infer from values
+        vals = df["depth"].dropna().values
+        if len(vals) == 0:
+            raise ValueError("Depth column exists but contains no valid values.")
+
+        median = np.nanmedian(vals)
+
+        if median > 1000:  # almost certainly meters
+            warnings.warn(
+                "Depth column 'depth' appears to be in meters. Converting to km."
+            )
+            return "depth", 1e-3
+        elif median < 100:  # likely km
+            warnings.warn(
+                "Depth column 'depth' assumed to be in kilometers."
+            )
+            return "depth", 1.0
+        else:
+            raise ValueError(
+                "Ambiguous depth units in 'depth' column. "
+                "Please specify depth column explicitly."
+            )
+
+    # 4. Nothing usable
+    raise KeyError(
+        "No recognizable depth column found. "
+        "Expected one of: depth_km, depth_m, depth(m), depth."
+    )
+
 # functions for GaMMA to Hypoinverse phase file conversion
-def format_event_line_gamma2hypoinverse(event): #gamma to hypoinverse
-    """
-    Formats a single event line for Hypoinverse phase file.
-    Keeps event ID and magnitude.
-    """
-    event_time = datetime.strptime(event["time"], "%Y-%m-%dT%H:%M:%S.%f")
-    lat_deg = int(event["latitude"])
-    lon_deg = int(event["longitude"])
-    lat_min = (abs(event["latitude"]) - abs(lat_deg)) * 60 * 100
-    lon_min = (abs(event["longitude"]) - abs(lon_deg)) * 60 * 100
-    south = "S" if event["latitude"] < 0 else " "
-    east = "E" if event["longitude"] >= 0 else " "
-    depth = event["depth(m)"] / 1000
-    mag = event["magnitude"]
-
-    line = (f"{event_time.strftime('%Y%m%d%H%M%S%f')[:-4]}"
-            f"{abs(lat_deg):2d}{south}{abs(lat_min):4.0f}"
-            f"{abs(lon_deg):3d}{east}{abs(lon_min):4.0f}"
-            f"{depth:5.0f}{mag:3.1f}{' ':97}{event['event_index']:10}\n")
-    return line
-
 def format_pick_line_gamma2hypoinverse(pick, default_component=None): #gamma to hypoinverse
     """
     Formats a single pick line for Hypoinverse phase file.
     Includes network, station, channel, component info.
+    ==========PARAMETERS=============
+    pick: a single pick record (Pandas Series).
+    default_component: default component to use if not specified in picks.
+    ==========RETURN=============
+    formatted pick line in Hypoinverse format.
     """
     try:
         network_code, station_code, comp_code, channel_code = pick['id'].split('.')
@@ -408,32 +480,104 @@ def format_pick_line_gamma2hypoinverse(pick, default_component=None): #gamma to 
         return None
 
 def convert_gamma2hypoinverse(eventfile, pickfile, outfile='phase_output.phs',
-                  qc=False, separator=',', default_component=None, verbose=False):
+                  qc=False, separator=',', default_component=None, verbose=False,evid_label="event_id",
+                         mapping_evid=True,evid_label_mapped=None,save_cleaned_data=False, cleaned_eventfile=None, cleaned_pickfile=None):
     """
     Converts GaMMA event and pick files to Hypoinverse phase file format.
+    ==========PARAMETERS=============
+    eventfile: input event CSV file from GaMMA.
+    pickfile: input pick CSV file from GaMMA.
+    outfile: output Hypoinverse phase file name.
+    qc: if True, only events with both P and S picks are written. Default is False.
+    separator: separator used in the input CSV files. Default is comma (,).
+    default_component: default component to use if not specified in picks.
+    verbose: if True, print progress messages. Default is False.
+    evid_label: column name for event ID in the input event and pick files. Default is "event_id".
+    mapping_evid: if True, remap event IDs to integers starting from 1 for HypoDD compatibility. Default is True. 
+                If False, original event IDs are used (may cause issues if IDs are not integers or not starting from 1).
+    evid_label_mapped: evid label after remapping. This is only effective when mapping_evid is True.
+    save_cleaned_data: if True, save cleaned event and pick data after removing invalid entries. Default is False.
+                Set to True automatically if mapping_evid is True.
+    cleaned_eventfile: output file name for cleaned event data. Default is None (auto-generate).
+    cleaned_pickfile: output file name for cleaned pick data. Default is None (auto-generate).
+    ==========RETURN=============
+    None
     """
-    # Read files
+    
+    # Read input
     events = pd.read_csv(eventfile, sep=separator)
     picks = pd.read_csv(pickfile, sep=separator)
-    
-    # Remove duplicate columns
-    picks = picks.loc[:, ~picks.columns.duplicated()]
-    # Consistent column name for event index
-    picks.rename(columns={"event_idx": "event_index"}, inplace=True)
-    # Group picks by event index for faster access
-    picks_eventwise = picks.groupby("event_index").groups
+    evdep_label,evdep_scale=resolve_event_depth_column(events)
+    #remove rows with event_idx negative. These are invalid picks/events.
+    if "event_idx" in picks.columns:
+        picks = picks[picks["event_idx"] >= 0]
 
-    with open(outfile, 'w') as f:
-        for _, event in tqdm(events.iterrows(), total=len(events)):
-            lines = [format_event_line_gamma2hypoinverse(event)]
+    if "event_index" in events.columns:
+        events = events[events["event_index"] >= 0]
+
+    # Clean columns
+    picks = picks.loc[:, ~picks.columns.duplicated()]
+    if mapping_evid:
+        save_cleaned_data = True
+        # remap event IDs to integers to be compatible with HypoDD
+        unique_evids = events[evid_label].unique()
+        evid_map = {evid: idx + 1 for idx, evid in enumerate(unique_evids)} # start from 1 for HypoDD compatibility
+
+        # add a new column for mapped event IDs
+        if evid_label_mapped is None:
+            evid_label_mapped = evid_label + "_mapped"
+        #apply mapping
+        events[evid_label_mapped] = events[evid_label].map(evid_map)
+        picks[evid_label_mapped] = picks[evid_label].map(evid_map)
+    else:
+        evid_label_mapped = evid_label
+
+    if save_cleaned_data:
+        # Save cleaned event and pick data
+        if cleaned_eventfile is None:
+            cleaned_eventfile = os.path.splitext(eventfile)[0] + "_cleaned.csv"
+        if cleaned_pickfile is None:
+            cleaned_pickfile = os.path.splitext(pickfile)[0] + "_cleaned.csv"
+        events.to_csv(cleaned_eventfile, index=False)
+        picks.to_csv(cleaned_pickfile, index=False)
+        print(f"Cleaned event data saved to {cleaned_eventfile}")
+        print(f"Cleaned pick data saved to {cleaned_pickfile}")
+    # Group picks by event
+    picks_by_event = picks.groupby(evid_label_mapped)
+
+    with open(outfile, "w") as f:
+        #loop over events
+        for event in tqdm(events.to_dict(orient="records"), desc="Converting GAMMA to HypoDD phase file"):
+            evid = event[evid_label_mapped]
+            if evid not in picks_by_event.groups:
+                continue
+            """
+            Formats a single event line for Hypoinverse phase file.
+            Keeps event ID and magnitude.
+            """
+            event_time = datetime.strptime(event["time"], "%Y-%m-%dT%H:%M:%S.%f")
+            lat_deg = int(event["latitude"])
+            lon_deg = int(event["longitude"])
+            lat_min = (abs(event["latitude"]) - abs(lat_deg)) * 60 * 100
+            lon_min = (abs(event["longitude"]) - abs(lon_deg)) * 60 * 100
+            south = "S" if event["latitude"] < 0 else " "
+            east = "E" if event["longitude"] >= 0 else " "
+            depth = event[evdep_label]*evdep_scale
+            mag = event["magnitude"]
+
+            lines = [(f"{event_time.strftime('%Y%m%d%H%M%S%f')[:-4]}"
+                    f"{abs(lat_deg):2d}{south}{abs(lat_min):4.0f}"
+                    f"{abs(lon_deg):3d}{east}{abs(lon_min):4.0f}"
+                    f"{depth:5.0f}{mag:3.1f}{' ':97}{evid:10}\n")]
+            
             has_p = has_s = False
 
             # Get picks for this event
-            for idx in picks_eventwise.get(event["event_index"], []):
-                pick_line = format_pick_line_gamma2hypoinverse(picks.iloc[idx], default_component)
+            for _, pick in picks_by_event.get_group(evid).iterrows():
+                pick_line = format_pick_line_gamma2hypoinverse(pick, default_component)
                 if pick_line:
                     lines.append(pick_line + "\n")
-                    phase_type = picks.iloc[idx]['type'].upper()
+                    phase_type = pick['type'].upper()
                     if phase_type == 'P': has_p = True
                     elif phase_type == 'S': has_s = True
 
@@ -442,19 +586,25 @@ def convert_gamma2hypoinverse(eventfile, pickfile, outfile='phase_output.phs',
                 f.writelines(lines)
                 f.write("\n")
                 if verbose:
-                    print(f"Event {event['event_index']} saved with {len(lines)-1} picks.")
+                    print(f"Event {event[evid_label_mapped]} saved with {len(lines)-1} picks.")
             elif verbose:
-                print(f"Event {event['event_index']} skipped (QC failed).")
+                print(f"Event {event[evid_label_mapped]} skipped (QC failed).")
 ######### end of functions for GaMMA to Hypoinverse phase file conversion
 
-
+######### functions for GaMMA to HypoDD phase file conversion
 # -------------------------------
 # Format one HypoDD pick line
 # -------------------------------
-def format_pick_line_gamma2hypodd(pick):
+def format_pick_line_gamma2hypodd(pick,origin_time,combine_net_sta=True):
     """
     Convert a single GAMMA pick to HypoDD phase format.
-    Station name = NET + STA
+    Station name = NET + STA. Pick line is based on the formatting in convert_legacyphase2hypodd().
+    ==========PARAMETERS=============
+    pick: a single pick record (Pandas Series) from GAMMA output.
+    origin_time: origin time of the event (datetime object).
+    combine_net_sta: if True, station name = NET.STA. Default is True [recommended].
+    ==========RETURN=============
+    formatted pick line in HypoDD format.
     """
 
     # Parse pick ID
@@ -463,8 +613,10 @@ def format_pick_line_gamma2hypodd(pick):
     except ValueError:
         warnings.warn(f"Invalid pick id format: {pick['id']}")
         return None
-
-    station = f"{net}.{sta}"
+    if combine_net_sta:
+        station = f"{net}.{sta}"
+    else:
+        station = sta
     phase = pick["type"].upper()
 
     if phase not in ("P", "S"):
@@ -473,67 +625,130 @@ def format_pick_line_gamma2hypodd(pick):
     # Pick time
     t = datetime.strptime(pick["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
 
-    # HypoDD time fields
-    yyyy = t.year
-    mm = t.month
-    dd = t.day
-    hh = t.hour
-    mi = t.minute
-    sec = t.second + t.microsecond / 1e6
+    picktime = UTCDateTime(t)
+    phase_dt = picktime - UTCDateTime(origin_time)
 
-    # Weight from GAMMA probability
-    # prob ~ [0.3, 1.0] → weight [0,4]
-    prob = pick.get("prob", 1.0)
-    weight = min(max(int((1 - prob) / (1 - 0.3) * 4), 0), 4)
+    weight = 1.0  # default weight
 
-    evid = int(pick["event_index"])
-
-    return (
-        f"{station:<7s} {phase} "
-        f"{yyyy:4d} {mm:02d} {dd:02d} "
-        f"{hh:02d} {mi:02d} {sec:06.3f} "
-        f"{weight:d} {evid:d}"
+    pickstr="{:<7}{:s}{:6.3f}  {:2f}   {:s}\n".format(
+        station, ' ' * 6,
+        phase_dt,
+        weight,
+        phase
     )
 
-
+    return pickstr
 # ---------------------------------------
 # Main GAMMA → HypoDD conversion function
 # ---------------------------------------
-def convert_gamma2hypodd(eventfile,
-                            pickfile,
-                            outfile="hypodd.phase",
-                            separator=",",
-                            qc=False,
-                            verbose=False):
+def convert_gamma2hypodd(eventfile,pickfile,outfile="hypodd.phase",separator=",",
+                         combine_net_sta=True,qc=False,verbose=False,evid_label="event_id",
+                         mapping_evid=True,evid_label_mapped=None,save_cleaned_data=False, 
+                         cleaned_eventfile=None, cleaned_pickfile=None):
     """
     Convert GAMMA event + pick CSVs to HypoDD phase file.
+    ==========PARAMETERS=============
+    eventfile: input event CSV file from GAMMA.
+    pickfile: input pick CSV file from GAMMA.
+    outfile: output HypoDD phase file name.
+    separator: separator used in the input CSV files. Default is comma (,).
+    qc: if True, only events with both P and S picks are written. Default is False.
+    combine_net_sta: if True, station name = NET.STA. Default is True [recommended].
+    verbose: if True, print progress messages. Default is False.
+    evid_label: column name for event ID in the input event and pick files. Default is "event_id".
+    mapping_evid: if True, remap event IDs to integers starting from 1 for HypoDD compatibility. Default is True. 
+                If False, original event IDs are used (may cause issues if IDs are not integers or not starting from 1).
+    evid_label_mapped: evid label after remapping. This is only effective when mapping_evid is True.
+    save_cleaned_data: if True, save cleaned event and pick data after removing invalid entries. Default is False.
+                Set to True automatically if mapping_evid is True.
+    cleaned_eventfile: output file name for cleaned event data. Default is None (auto-generate).
+    cleaned_pickfile: output file name for cleaned pick data. Default is None (auto-generate).
+    ==========RETURN=============
+    None
     """
 
     # Read input
     events = pd.read_csv(eventfile, sep=separator)
     picks = pd.read_csv(pickfile, sep=separator)
+    evdep_label,evdep_scale=resolve_event_depth_column(events)
+    #remove rows with event_idx negative. These are invalid picks/events.
+    if "event_idx" in picks.columns:
+        picks = picks[picks["event_idx"] >= 0]
+
+    if "event_index" in events.columns:
+        events = events[events["event_index"] >= 0]
 
     # Clean columns
     picks = picks.loc[:, ~picks.columns.duplicated()]
-    picks.rename(columns={"event_idx": "event_index"}, inplace=True)
+    if mapping_evid:
+        save_cleaned_data = True
+        # remap event IDs to integers to be compatible with HypoDD
+        unique_evids = events[evid_label].unique()
+        evid_map = {evid: idx + 1 for idx, evid in enumerate(unique_evids)} # start from 1 for HypoDD compatibility
 
+        # add a new column for mapped event IDs
+        if evid_label_mapped is None:
+            evid_label_mapped = evid_label + "_mapped"
+        #apply mapping
+        events[evid_label_mapped] = events[evid_label].map(evid_map)
+        picks[evid_label_mapped] = picks[evid_label].map(evid_map)
+    else:
+        evid_label_mapped = evid_label
+
+    if save_cleaned_data:
+        # Save cleaned event and pick data
+        if cleaned_eventfile is None:
+            cleaned_eventfile = os.path.splitext(eventfile)[0] + "_cleaned.csv"
+        if cleaned_pickfile is None:
+            cleaned_pickfile = os.path.splitext(pickfile)[0] + "_cleaned.csv"
+        events.to_csv(cleaned_eventfile, index=False)
+        picks.to_csv(cleaned_pickfile, index=False)
+        print(f"Cleaned event data saved to {cleaned_eventfile}")
+        print(f"Cleaned pick data saved to {cleaned_pickfile}")
     # Group picks by event
-    picks_by_event = picks.groupby("event_index")
+    picks_by_event = picks.groupby(evid_label_mapped)
 
     with open(outfile, "w") as f:
-        for _, event in tqdm(events.iterrows(), total=len(events)):
+        #loop over events
+        for event in tqdm(events.to_dict(orient="records"), desc="Converting GAMMA to HypoDD phase file"):
 
-            evid = event["event_index"]
+            evid = event[evid_label_mapped]
             if evid not in picks_by_event.groups:
                 continue
 
+            # Event header line
+            ot = datetime.strptime(
+                event["time"], "%Y-%m-%dT%H:%M:%S.%f"
+            )
+            lat = event["latitude"]
+            lon = event["longitude"]
+            dep = event[evdep_label]*evdep_scale  # convert m to km 
+            mag = event.get("magnitude", 0.0)
+            f.write(
+                "# {:4d} {:02d} {:02d}  {:02d} {:02d} {:06.3f}  "
+                "{:7.4f} {:9.4f}  {:6.2f} {:4.2f} 0.00  0.00  0.00 {:9d}\n".format(
+                    ot.year,
+                    ot.month,
+                    ot.day,
+                    ot.hour,
+                    ot.minute,
+                    ot.second + ot.microsecond / 1e6,
+                    lat,
+                    lon,
+                    dep,
+                    mag,
+                    evid,
+                )
+            )
+
+            # Pick lines
             lines = []
             has_p = has_s = False
 
             for _, pick in picks_by_event.get_group(evid).iterrows():
-                line = format_pick_line_gamma2hypodd(pick)
+                line = format_pick_line_gamma2hypodd(pick, ot,combine_net_sta=combine_net_sta)
                 if line:
-                    lines.append(line + "\n")
+                    lines.append(line)
                     if pick["type"].upper() == "P":
                         has_p = True
                     elif pick["type"].upper() == "S":
@@ -546,3 +761,140 @@ def convert_gamma2hypodd(eventfile,
                     print(f"Event {evid}: {len(lines)} picks written")
             elif verbose:
                 print(f"Event {evid} skipped (QC failed)")
+##### end of functions for GaMMA to HypoDD phase file conversion
+
+#
+def convert_legacyphase2hypodd(phase_file_in,phase_file_out, dep_corr=5,
+                       time_range=None,lat_range=None,lon_range=None):
+    """
+    Reformat input phase file for HypoDD run. This is a legacy function modified from hypo-interface-py.
+    I kept it here for backward compatibility.
+
+    Applies:
+      - time window filtering
+      - lat/lon window filtering
+      - depth correction
+
+    Parameters
+    ----------
+    phase_file_in : str
+        Input phase file path.
+    phase_file_out : str
+        Output phase file path.
+    dep_corr : float
+        Depth correction to avoid air quakes. Default: 5 km.
+    time_range : str
+        Time range filter in 'YYYY-MM-DDTHH:MM:SS-YYYY-MM-DDTHH:MM:SS' format. Default: None (no filter).
+    lat_range : tuple
+        Latitude range filter as (lat_min, lat_max). Default: None (no filter).
+    lon_range : tuple
+        Longitude range filter as (lon_min, lon_max). Default: None (no filter).    
+
+    Returns
+    -------
+    phase_file_out : str
+        Output phase file path.
+    evid_list : np.ndarray
+        Array of event IDs included in the output phase file.
+    """
+    fout_dir = os.path.split(phase_file_out)[0]
+    os.makedirs(fout_dir, exist_ok=True)
+
+    #subset filters
+    if time_range is not None:
+        ot_min, ot_max = [UTCDateTime(date) for date in time_range.split('-')]
+        subset_time = True
+    if lat_range is not None:
+        lat_min, lat_max = lat_range
+    else:
+        lat_min, lat_max = -90.0, 90.0
+    if lon_range is not None:
+        lon_min, lon_max = lon_range
+    else:
+        lon_min, lon_max = -180.0, 180.0
+
+    evid_list = []
+
+    # --------------------------------------------------
+    # Read original phase file
+    # --------------------------------------------------
+    with open(phase_file_in) as f:
+        lines = f.readlines()
+
+    with open(phase_file_out, 'w') as fout:
+        for line in lines:
+            codes = line.strip().split(',')
+
+            # ------------------------------------------
+            # Event header line
+            # ------------------------------------------
+            if len(codes[0]) >= 14:
+                ot = UTCDateTime(codes[0])
+                lat, lon, dep, mag = [float(code) for code in codes[1:5]]
+                dep += dep_corr
+                evid = int(codes[-1])
+
+                # Filters
+                if subset_time:
+                    if not (ot_min < ot < ot_max):
+                        write_event = False
+                        continue
+                if not (lat_min <= lat <= lat_max and lon_min <= lon <= lon_max):
+                    write_event = False
+                    continue
+
+                write_event = True
+                evid_list.append(evid)
+
+                # Format time
+                date = '{:4} {:2} {:2}'.format(ot.year, ot.month, ot.day)
+                time = '{:2} {:2} {:5.2f}'.format(
+                    ot.hour, ot.minute, ot.second + ot.microsecond / 1e6
+                )
+
+                # Format location
+                loc = '{:7.4f} {:9.4f}  {:6.2f} {:4.2f}'.format(
+                    lat, lon, dep, mag
+                )
+
+                fout.write(
+                    '# {} {}  {}  0.00  0.00  0.00  {:>9}\n'.format(
+                        date, time, loc, evid
+                    )
+                )
+
+            # ------------------------------------------
+            # Station pick lines
+            # ------------------------------------------
+            else:
+                if not write_event:
+                    continue
+
+                netsta = codes[0].strip()
+                wp, ws = 1.0, 1.0
+
+                # P pick
+                if codes[1] != '-1':
+                    tp = UTCDateTime(codes[1])
+                    ttp = tp - ot
+                    fout.write(
+                        '{:<7}{}{:6.3f}  {:6.3f}   P\n'.format(
+                            netsta, ' ' * 6, ttp, wp
+                        )
+                    )
+
+                # S pick
+                if codes[2] != '-1':
+                    ts = UTCDateTime(codes[2])
+                    tts = ts - ot
+                    fout.write(
+                        '{:<7}{}{:6.3f}  {:6.3f}   S\n'.format(
+                            netsta, ' ' * 6, tts, ws
+                        )
+                    )
+
+    # --------------------------------------------------
+    print(f"[INFO] Wrote single phase file: {phase_file_out}")
+    print(f"[INFO] Number of events: {len(evid_list)}")
+
+    return phase_file_out, np.array(evid_list)

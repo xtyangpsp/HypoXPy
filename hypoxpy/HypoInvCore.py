@@ -1,10 +1,13 @@
-#This module contains core functions for running HypoInvPy interface.
+#This module contains core functions for running HypoInverse interface.
 #Import needed packages first.
 import pandas as pd
 import os,glob
 import numpy as np
 from hypoxpy import utils
 import subprocess
+from pathlib import Path
+from obspy import UTCDateTime
+from tqdm import tqdm
 #
 #
 def generate_parfile(config,pardir='input',outdir='output',template=None,magline=None):
@@ -28,7 +31,7 @@ def generate_parfile(config,pardir='input',outdir='output',template=None,magline
     filelist=[]
     for ztr in config.ztrlist:
         # set control file
-        fhyp = os.path.join(pardir,'%s-%s.hyp'%(config.namebase, ztr))
+        fhyp = os.path.join(pardir,'%s-%s.hypoinv.par'%(config.namebase, ztr))
         filelist.append(fhyp)
 
         #save parameters by modifying the template parameters.
@@ -50,7 +53,7 @@ def generate_parfile(config,pardir='input',outdir='output',template=None,magline
             if line[0:5]=='CRE 1': line = "CRE 1 '%s' %s T \n"%(config.pmodel, config.ref_ele)
             if line[0:5]=='CRE 2': line = "CRE 2 '%s' %s T \n"%(config.smodel, config.ref_ele)
             if line[0:3]=='POS': line = "POS %s \n"%(config.poisson)
-            if line[0:3]=='SUM': line = "SUM '%s/%s-%s.sum' \n"%(outdir,config.namebase, ztr)
+            if line[0:3]=='SUM': line = "SUM '%s/%s-hypoinv_%s.sum' \n"%(outdir,config.namebase, ztr)
             if line[0:3]=='MIN': line = "MIN %d \n"%(config.min_nsta)
             if line[0:3]=='PRT': 
                 line = "PRT '%s/%s-%s.ptr' \n"%(outdir,config.namebase, ztr) if config.get_prt else ''
@@ -74,6 +77,51 @@ def generate_parfile(config,pardir='input',outdir='output',template=None,magline
         fout.close()
     #
     return filelist
+
+def summary_to_catalog(df, lat_code, lon_code, mag_dict=None, evid_label="event_id"):
+    """
+    Convert hypoinverse summary dataframe to a catalog dataframe.
+    """
+    rows = []
+
+    for _, row in df.iterrows():
+        line = row["line"]
+        evid = row["evid"]
+
+        # origin time → UTCDateTime ISO format
+        date, hrmn, sec = line.split()[0:3]
+        sec = sec.zfill(5)
+        ot = UTCDateTime(f"{date}{hrmn}{sec}")
+        time_str = ot.strftime("%Y-%m-%dT%H:%M:%S.%f")
+        # latitude
+        lat_deg = float(line[20:22])
+        lat_min = float(line[23:28])
+        lat = lat_deg + lat_min / 60 if lat_code == "N" else -lat_deg - lat_min / 60
+
+        # longitude
+        lon_deg = float(line[29:32])
+        lon_min = float(line[33:38])
+        lon = lon_deg + lon_min / 60 if lon_code == "E" else -lon_deg - lon_min / 60
+
+        # depth & magnitude
+        dep = float(line[38:45])
+        mag = float(line[45:52])
+
+        if mag_dict is not None and str(evid) in mag_dict:
+            mag = mag_dict[str(evid)]
+
+        rows.append(
+            {
+                "time": time_str,
+                "latitude": lat,
+                "longitude": lon,
+                "depth_km": dep,
+                "magnitude": mag,
+                evid_label: evid,
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 #####
 #####
@@ -112,9 +160,10 @@ class HypoInvConfig(object):
                lat_code='N',lon_code='W',ref_ele=0.0,grd_ele=0.0,
                ztrlist = np.arange(0,20,1),rms_weight='4 0.3 1 3',dist_initial = '1 50 1 2',
                dist_weight = '4 20 1 3',weight_code='1 0.6 0.3 0.2',min_nsta=4):
+        self.type="HypoInvConfig object"
         if binpath is None:
             binpath = 'hyp1.40' # default path to hypoinverse binary, assuming it is in the system PATH
-        self.binpath = binpath
+        self.binpath = os.path.join(binpath,'hyp1.40') #hard-coded hypoinverse program. 
         self.indir = indir
         self.outdir = outdir
         self.namebase = namebase
@@ -148,111 +197,208 @@ class HypoInvConfig(object):
             os.makedirs(self.outdir)
         if not os.path.exists(self.indir):
             os.makedirs(self.indir)
+    def __str__(self):
+        lines = [
+            f"{self.type}",
+            "-" * len(self.type),
+
+            # Executable / paths
+            f"HYPOINVERSE binary : {self.binpath}",
+            f"Input directory   : {self.indir}",
+            f"Output directory  : {self.outdir}",
+            f"Name base         : {self.namebase}",
+
+            # Input files
+            f"Phase file        : {self.phase_file}",
+            f"Station file     : {self.station_file}",
+            f"P velocity model : {self.pmodel}",
+            f"S velocity model : {self.smodel}",
+            f"Poisson ratio    : {self.poisson}",
+
+            # Geographic reference
+            f"Latitude code    : {self.lat_code}",
+            f"Longitude code   : {self.lon_code}",
+            f"Reference elev.  : {self.ref_ele}",
+            f"Grid elev.       : {self.grd_ele}",
+
+            # Location / weighting parameters
+            f"Initial depths   : {list(self.ztrlist)}",
+            f"Min # stations   : {self.min_nsta}",
+            f"RMS weight       : {self.rms_weight}",
+            f"Initial dist.    : {self.dist_initial}",
+            f"Dist. weight     : {self.dist_weight}",
+            f"Weight code      : {self.weight_code}",
+
+            # Output controls
+            f"Write PRT file   : {self.get_prt}",
+            f"Write ARC file   : {self.get_arc}",
+        ]
+
+        return "\n".join(lines)
+    def __repr__(self):
+        return (
+            f"HypoInvConfig("
+            f"phase_file={self.phase_file}, "
+            f"station_file={self.station_file}, "
+            f"pmodel={self.pmodel}, "
+            f"smodel={self.smodel}, "
+            f"outdir={self.outdir})"
+        )
 
     #-------------------------------------------------
     # core function to run hypoinverse
     #-------------------------------------------------
-    def run(self,parfilelist, cleanup=True, merge_summary=False):
+    def run(self,parfilelist):
         """
         Run hypoinverse for a list of parameter files.
         ======== PARAMETERS ==========
         parfilelist: list of parameter files for hypoinverse.
         cleanup: whether to remove intermediate files after running hypoinverse. Default True. 
-                If merge_summary is True, the summary files will be removed after merging is done.
-
-        merge_summary: whether to merge summary files after running hypoinverse. Default False.
-                User can also call merge_summary() function separately.
         ========
         """
-        
-        for fhyp in parfilelist:
-            # 2. run hypoinverse
-            p = subprocess.Popen([self.binpath], stdin=subprocess.PIPE,encoding='utf-8')
-            s = "@{}".format(fhyp) + '\n'
-            p.communicate(s)
-        #
-        if merge_summary:
-            self.merge_summary(cleanup=cleanup)
-        #-------------------------------------------------
+        for fhyp in tqdm(parfilelist,"Running %s by depth grids"%(self.binpath)):
+            log_file = Path(fhyp).with_suffix(".log")
+            with open(log_file, "w") as log:
+                p = subprocess.Popen(
+                    [self.binpath],
+                    stdin=subprocess.PIPE,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,  # capture errors too
+                    encoding="utf-8"
+                )
+
+                s = f"@{fhyp}\n"
+                p.communicate(s)
+
+    ###
+    def finalize(self,mag_dict=None,evid_label="event_id",cleanup=False,out_good=None,out_bad=None):
+                #-------------------------------------------------
+        cat_good,cat_bad = self._merge_summary(mag_dict=mag_dict,evid_label=evid_label,
+                            out_good=out_good,out_bad=out_bad)
         # remove intermidiate files
         if cleanup:
-            for fname in glob.glob('fort.*'): os.unlink(fname)
-            for fname in glob.glob('input/%s-*.hyp'%self.namebase): os.unlink(fname)
+            files_to_remove = []
 
+            files_to_remove.extend(glob.glob('fort.*'))
+            files_to_remove.extend(glob.glob(f'{self.indir}/{self.namebase}-*.hypoinv.par'))
+            files_to_remove.extend(glob.glob(f'{self.indir}/{self.namebase}-*.hypoinv.log'))
+            files_to_remove.extend(glob.glob(f'{self.outdir}/{self.namebase}-hypoinv_*.sum'))
+
+            for fname in files_to_remove:
+                try:
+                    os.remove(fname)
+                except FileNotFoundError:
+                    pass
+                except Exception as e:
+                    print(f"[WARN] Could not remove {fname}: {e}")
+        #
+        return cat_good,cat_bad
     ####
-    def merge_summary(self,filelist=None,mag_dict=None,cleanup=True):
+    def _merge_summary(self,mag_dict=None,evid_label="event_id",
+                       out_good=None,out_bad=None):
         """
         Extract earthquake parameters based on final quality after merging all summary files.
+        Uses pandas DataFrame internally.
 
-        ======PARAMETERS======
-        filelist: list of summary files to merge. Default None (all summary files in output dir).
-        mag_dict: magnitude dictionary in the form of {'id',mag} for all events. Default None (use hypoinverse output).
-                mag_dict could also be specified as a catalog file in csv format. E.g., the catalog from GAMMA.
+        PARAMETERS
+        ----------
+        mag_dict : dict or str, optional
+            Magnitude dictionary {event_id: magnitude} or CSV catalog path.
+        evid_label : str
+            Event ID column name if mag_dict is a CSV.
         """
-        if filelist is None:
-            filelist=glob.glob('%s/%s-*.sum'%(self.outdir,self.namebase))
-        file_good='%s/%s_good.csv'%(self.outdir,self.namebase)
-        file_bad='%s/%s_bad.csv'%(self.outdir,self.namebase)
 
+        filelist = glob.glob(f"{self.outdir}/{self.namebase}-hypoinv_*.sum")
+
+        if out_good is None:
+            out_good = f"{self.outdir}/{self.namebase}_good.csv"
+        if out_bad is None:
+            out_bad  = f"{self.outdir}/{self.namebase}_bad.csv"
+
+        # --------------------------------------------------
+        # Load magnitude dictionary if provided
+        # --------------------------------------------------
+        mag_dict_use = None
         if mag_dict is not None:
-            if isinstance(mag_dict,str):
-                events=pd.read_csv(mag_dict)
-                mag_dict_use=dict()
-                for i in range(len(events.time)):
-                    event = events.iloc[i]
-                    # print(event['event_index'].astype(str))
-                    mag_dict_use[event['event_index'].astype(str)] = event['magnitude']
-                #
-            elif isinstance(mag_dict,dict):
+            if isinstance(mag_dict, str):
+                events = pd.read_csv(mag_dict)
+                mag_dict_use = dict(
+                    zip(events[evid_label].astype(str), events["magnitude"])
+                )
+            elif isinstance(mag_dict, dict):
                 mag_dict_use = mag_dict
             else:
-                raise ValueError('mag_dict is wrong in type. CSV catalog or dictionary.')
-        else:
-            mag_dict_use = mag_dict
-        fout_bad = open(file_bad,'w')
-        fout_good = open(file_good,'w')
-        
-        # read sum files
-        sum_dict = {}
+                raise ValueError("mag_dict must be a dict or CSV filename.")
+
+        # --------------------------------------------------
+        # Read and concatenate all summary files
+        # --------------------------------------------------
+        records = []
+
         for fsum in filelist:
-            f=open(fsum); sum_lines=f.readlines(); f.close()
-            for sum_line in sum_lines:
-                evid = sum_line.split()[-1]
-                if evid not in sum_dict: sum_dict[evid] = [sum_line]
-                else: sum_dict[evid].append(sum_line)
-        
-        # merge sum lines
-        for evid, sum_lines in sum_dict.items():
-            sum_list = []
-            dtype = [('line','O'),('is_loc','O'),('qua','O'),('azm','O'),('npha','O'),('rms','O')]
-            for sum_line in sum_lines:
-                codes = sum_line.split()
-                is_loc = 1 # whether loc reliable
-                if '-' in codes or '#' in codes: is_loc = 0
-                qua = sum_line[80:81]
-                npha = 1 / float(sum_line[52:55])
-                azm  = float(sum_line[56:59])
-                rms  = float(sum_line[64:69])
-                sum_list.append((sum_line, is_loc, qua, azm, npha, rms))
-            sum_list = np.array(sum_list, dtype=dtype)
-            sum_list = np.sort(sum_list, order=['qua','azm','npha','rms'])
-            sum_list_loc = sum_list[sum_list['is_loc']==1]
-            num_loc = len(sum_list_loc)
-            # if no reliable loc
-            if num_loc==0:
-                sum_list_loc = sum_list
-                utils.write_csv(fout_bad, sum_list_loc[0]['line'], evid,self.lat_code,self.lon_code,mag_dict=mag_dict_use)
+            with open(fsum) as f:
+                for line in f:
+                    evid = line.split()[-1]
+
+                    codes = line.split()
+                    is_loc = 0 if ("-" in codes or "#" in codes) else 1
+
+                    records.append(
+                        {
+                            "evid": evid,
+                            "line": line,
+                            "is_loc": is_loc,
+                            "qua": line[80:81],
+                            "azm": float(line[56:59]),
+                            "npha": 1.0 / float(line[52:55]),
+                            "rms": float(line[64:69]),
+                        }
+                    )
+
+        df = pd.DataFrame(records)
+
+        # --------------------------------------------------
+        # Sort using Hypoinverse priority logic
+        # --------------------------------------------------
+        df = df.sort_values(
+            by=["evid", "qua", "azm", "npha", "rms"],
+            ascending=[True, True, True, True, True],
+        )
+
+        # --------------------------------------------------
+        # Pick best location per event
+        # --------------------------------------------------
+        good_rows = []
+        bad_rows = []
+
+        for evid, g in df.groupby("evid"):
+            g_loc = g[g["is_loc"] == 1]
+
+            if len(g_loc) > 0:
+                good_rows.append(g_loc.iloc[0])
             else:
-                utils.write_csv(fout_good, sum_list_loc[0]['line'], evid,self.lat_code,self.lon_code,mag_dict=mag_dict_use)
+                bad_rows.append(g.iloc[0])
 
-        fout_bad.close()
-        fout_good.close()
+        df_good = pd.DataFrame(good_rows)
+        df_bad  = pd.DataFrame(bad_rows)
 
-        print('Earthquakes are saved in: '+file_good+' and '+file_bad+' for good and bad sources.')
-        
-        # remove summary files.
-        if cleanup:
-            for fname in glob.glob(self.outdir+'/'+self.namebase+'*.sum'): os.unlink(fname)
+        cat_good = summary_to_catalog(df_good,self.lat_code,self.lon_code,mag_dict=mag_dict_use,evid_label=evid_label)
+        cat_bad  = summary_to_catalog(df_bad,self.lat_code,self.lon_code,mag_dict=mag_dict_use,evid_label=evid_label)
+
+        # --------------------------------------------------
+        # Save with headers
+        # --------------------------------------------------
+        cat_good.to_csv(out_good, index=False)
+        cat_bad.to_csv(out_bad, index=False)
+
+        print(
+            f"Earthquakes are saved in:\n"
+            f"  {out_good} (good)\n"
+            f"  {out_bad} (bad)"
+        )
+
+        return cat_good,cat_bad
+
 
 
 
