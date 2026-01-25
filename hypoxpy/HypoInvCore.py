@@ -329,7 +329,6 @@ class HypoInvConfig(object):
                 mag_dict_use = mag_dict
             else:
                 raise ValueError("mag_dict must be a dict or CSV filename.")
-
         # --------------------------------------------------
         # Read and concatenate all summary files
         # --------------------------------------------------

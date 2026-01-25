@@ -24,105 +24,254 @@ IMPORTANT DISCLAIMER
 This software is provided as a research tool and is not intended for operational
 or hazard-critical use without independent verification.
 """
-import os,glob,sys
-
+from hypoxpy import utils
+from hypoxpy import HypoInvCore
+from hypoxpy import HypoDDCore
 #
-def sanity_check(cfg):
-    # -------------------------
-    # Logical workflow checks
-    # -------------------------
-    if cfg["run_hypodd"] and not cfg["run_hypoinverse"]:
-        if not cfg["allow_gamma_only"]:
-            raise ValueError(
-                "Direct GAMMA → HYPODD is discouraged. "
-                "Set allow_gamma_only=True to override."
-            )
-
-    # -------------------------
-    # Required inputs
-    # -------------------------
-    if cfg["run_hypoinverse"] and cfg["velocity_model"] is None:
-        raise ValueError("velocity_model is required for HYPOINVERSE.")
-
-    # -------------------------
-    # Parameter consistency
-    # -------------------------
-    if "fix_depth" in cfg["hypoinv"] and "depth" not in cfg["hypoinv"]:
-        raise ValueError(
-            "hypoinv.fix_depth=True requires hypoinv.depth to be set."
-        )
-
-    # -------------------------
-    # Soft warnings (not fatal)
-    # -------------------------
-    if cfg["run_hypodd"]:
-        if cfg["hypodd"].get("min_obs", 0) < 6:
-            print(
-                "WARNING: HypoDD min_obs < 6 may lead to unstable solutions."
-            )
-
-def make_config(velocity_model=None,run_hypoinverse=True,run_hypodd=True,
-                allow_gamma_only=False,hypoinv_kwargs=None,hypodd_kwargs=None,
-                gamma_kwargs=None):
+def sanity_check(config,skip_hypoinverse=False,skip_hypodd=False):
     """
-    Create a validated configuration dictionary for hypoxpy workflows.
+    Perform sanity checks on configuration
     """
+    required_keys = ["paths", "preprocess", "event_id", "files"]
+    for key in required_keys:
+        if key not in config:
+            raise KeyError(f"Missing '{key}' section in config")
+    # Additional checks can be added here as needed
+    if not skip_hypoinverse:
+        hypoinv_key = "hypoinverse"
+        if hypoinv_key not in config:
+            raise KeyError(f"Missing '{hypoinv_key}' section in config")
+    if not skip_hypodd:
+        hypodd_key = "hypodd"
+        if hypodd_key not in config:
+            raise KeyError(f"Missing '{hypodd_key}' section in config")
 
-    cfg = {
-        "velocity_model": velocity_model,
-        "run_hypoinverse": run_hypoinverse,
-        "run_hypodd": run_hypodd,
-        "allow_gamma_only": allow_gamma_only,
-        "gamma": gamma_kwargs or {},
-        "hypoinv": hypoinv_kwargs or {},
-        "hypodd": hypodd_kwargs or {},
-    }
-
-    sanity_check(cfg)
-    return cfg
-
-def relocate(phase_file,outdir,config=None,cleanup=True):
+def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma",
+             verbose=False,debug=False):
     """
     End-to-end earthquake relocation workflow.
 
-    NOTE: This function applies recommended defaults but does not replace
+    This function applies recommended defaults but does not replace
     dataset-specific tuning or scientific judgment.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary containing paths, preprocessing options,
+        event ID handling, file paths, and parameters for HYPOINVERSE and HYPODD.
+    skip_hypoinverse : bool, optional
+        If True, skip the HYPOINVERSE absolute location step. Default is False.
+    skip_hypodd : bool, optional
+        If True, skip the HYPODD relative relocation step. Default is False.
+    input_type : str
+        Type of input phase/event files. Current options:
+        - "gamma"  : GAMMA picks + catalog (default)
+        - "hypoinv": Phase file from HYPOINVERSE
+        - "other"  : Placeholder for other formats
+    verbose : bool, optional
+        If True, enable verbose logging. Default is False.
+    debug : bool, optional
+        If True, enable debug mode with additional checks and outputs. Default is False.
     """
+    valid_inputs = ["gamma", "hypoinv", "other"]
+    if input_type not in valid_inputs:
+        raise ValueError(f"Unknown input_type='{input_type}', choose from {valid_inputs}")
+
+    #only gamma input is currently supported
+    if input_type != "gamma":
+        raise NotImplementedError(f"Input type '{input_type}' not yet implemented.")
     
     print("Main driver of running the workflow.")
-    if config is None:
-        config = make_config()
 
-    os.makedirs(outdir, exist_ok=True)
+    #sanity check for the main running boolean flags
+    if skip_hypoinverse and skip_hypodd:
+        raise ValueError("Both skip_hypoinverse and skip_hypodd cannot be True simultaneously.")
 
-    gamma_cat = utils.gamma_to_catalog(
-        phase_file,
-        outdir,
-        **config["gamma"],
-    )
+    # Perform sanity checks on config
+    sanity_check(config,skip_hypoinverse=skip_hypoinverse,skip_hypodd=skip_hypodd)
 
-    if config["run_hypoinverse"]:
-        hypoinv_cat = HypoInvCore.run(
-            gamma_cat,
-            config["velocity_model"],
-            outdir,
-            **config["hypoinv"],
-        )
-    else:
-        hypoinv_cat = gamma_cat
+    # --------------------
+    # Paths
+    # --------------------
+    paths = config["paths"]
+    binpath  = paths["binpath"]
+    indir    = paths["indir"]
+    outdir   = paths["outdir"]
+    namebase = paths["namebase"]
 
-    if config["run_hypodd"]:
-        hypodd_cat = HypoDDCore.run(
-            hypoinv_cat,
-            outdir,
-            **config["hypodd"],
-        )
-    else:
-        hypodd_cat = hypoinv_cat
+    # --------------------
+    # Preprocess controls
+    # --------------------
+    preprocess = config["preprocess"]
+    save_cleaned_data = preprocess["save_cleaned_data"]
+    cleaned_eventfile = preprocess["cleaned_eventfile"]
+    cleaned_pickfile  = preprocess["cleaned_pickfile"]
+    combine_net_sta   = preprocess["combine_net_sta"]
+    cleanup           = preprocess["cleanup"]
+    qc_phase          = preprocess["qc_phase"]
 
-    return {
-        "gamma": gamma_cat,
-        "hypoinverse": hypoinv_cat if config["run_hypoinverse"] else None,
-        "hypodd": hypodd_cat if config["run_hypodd"] else None,
-    }
+    # --------------------
+    # Event ID handling
+    # --------------------
+    event_id = config["event_id"]
+    evid_label        = event_id["evid_label"]
+    mapping_evid      = event_id["mapping_evid"]
+    evid_label_mapped = event_id["evid_label_mapped"]
+
+    # --------------------
+    # Files
+    # --------------------
+    files = config["files"]
+
+    station_file          = files["stations"]["json"]
+    station_file_hypoinv  = files["stations"]["hypoinv"]
+    station_file_hypodd   = files["stations"]["hypodd"]
+
+    event_file            = files["events"]
+
+    phase_file_raw        = files["phases"]["raw"]
+    phase_file_hypoinv    = files["phases"]["hypoinv"]
+    phase_file_hypodd     = files["phases"]["hypodd"]
+
+    out_hypoinv_bad       = files["final_catalogs"]["hypoinv_bad"]
+    out_hypoinv_good      = files["final_catalogs"]["hypoinv_good"]
+    out_hypodd_final      = files["final_catalogs"]["hypodd_final"]
+
+    # --------------------
+    # HypoInverse params
+    # --------------------
+    if not skip_hypoinverse:
+        hypoinv = config["hypoinverse"]
+        pmodel      = hypoinv["p_model"]
+        smodel      = hypoinv["s_model"]
+        depth_list  = hypoinv["depth_list"]
+        min_nsta    = hypoinv["min_nsta"]
+
+    # --------------------
+    # HypoDD params
+    # --------------------
+    if not skip_hypodd:
+        hypodd = config["hypodd"]
+        dep_corr          = hypodd["dep_corr"]
+        template_ph2dt    = hypodd["ph2dt_template"]
+        template_hypodd   = hypodd["hypodd_template"]
+
+    """
+    Perform hypoinverse
+    """
+    if not skip_hypoinverse:
+        # Reformat station file for hypoinverse
+        utils.reformat_stainfo_hypoinverse(station_file,station_file_hypoinv,informat='json-gamma',ignore_component=False)
+        print("Reformatted station file for hypoinverse: "+station_file_hypoinv)
+
+        # Reformat phase file for hypoinverse
+        if input_type == "gamma":
+            print("Using GAMMA picks and catalog as input for HypoInverse.")
+            """
+            Convert the phase picks and catalog from GAMMA to Hypoinverse format
+            The outputs from running GAMMA contain picks and preliminary catalog, while the solutions of locations are poor.
+            This block shows examples of converting or merging the picks and earthquake catalog to phase data format needed 
+            by Hypoinverse. We are using Y2000-compatible format here (https://ncedc.org/ftp/pub/doc/ncsn/shadow2000.pdf).
+
+            If `qc` is True, only events with both P and S picks will be saved. 
+            `default_component` here to address the issue that GAMMA picks only have two letters for the channels (only 
+            channel type). Use one letter code here to replace the empty component code. If the component code also exists, 
+            the `default_component` value will be ignored.
+
+            `mapping_evid` re-assign the event id counting from 1.
+            """
+            utils.convert_gamma2hypoinverse(event_file,phase_file_raw,outfile=phase_file_hypoinv,qc=qc_phase,default_component='Z',verbose=verbose,
+                                    evid_label=evid_label,mapping_evid=mapping_evid,evid_label_mapped=evid_label_mapped,save_cleaned_data=save_cleaned_data,
+                                    cleaned_eventfile=cleaned_eventfile,cleaned_pickfile=cleaned_pickfile)
+        elif input_type == "hypoinv":
+            print("Using existing HypoInverse phase file as input for HypoInverse.")
+            # Directly use the provided hypoinv phase file
+            phase_file_hypoinv = phase_file_raw
+        else:
+            raise NotImplementedError(f"Input type '{input_type}' not yet implemented for HypoInverse.")
+        """
+        Driver to run HypoInverse via the HypoInvCore module
+        Major parameters to run the code are carried through with a container class named `HypoInvCore.HypoInvConfig()`. 
+        This class is simplified from the `config()` class in `Hypo-Interface-Py`. In `HypoXPy`, I also reduced the number 
+        of metadata/parameters, to focus only on required key parameters.
+
+        Examples here use the phase information directly from the `GAMMA` association step. The station information file 
+        has been reformated as shown in the previous cell. 
+        """
+        hypoinv_handle = HypoInvCore.HypoInvConfig(binpath=binpath,indir=indir,outdir=outdir,phase_file=phase_file_hypoinv,
+                                           station_file=station_file_hypoinv,pmodel=pmodel,smodel=smodel,min_nsta=min_nsta,
+                                           namebase=namebase,ztrlist=depth_list)
+        #print handle parameters for checking
+        if debug: print(hypoinv_handle)
+
+        #run HypoInverse
+        """
+        This is the key step to run hypoinverse. I kept the way Hypo-Interface-Py uses running the code on a series of 
+        initial depths. This list is specified as `ztrlist` in the configuration step above.
+        """
+        # 1. produce parameter files for each testing initial depth.
+        hypinvparfilelist=HypoInvCore.generate_parfile(hypoinv_handle,indir,outdir=outdir,magline="MAG 1 T 1 1")
+
+        # 2. Run hypoinverse with all parameter files.
+        hypoinv_handle.run(hypinvparfilelist)
+        # 3. Collect and merge the results from all initial depths.
+        """
+        Extract inversion results based on quality. In `HypoInvCore.HypoInvConfig.finalize()`, you can pass the original 
+        event catalog to retrieve the magnitude information. Otherwise, the function will extract the magnitude from the HypoInverse results.
+        """
+        hypoinv_handle.finalize(mag_dict=cleaned_eventfile,evid_label=evid_label_mapped,
+                            cleanup=cleanup,out_good=out_hypoinv_good,out_bad=out_hypoinv_bad)
+
+    if not skip_hypodd:
+        # Reformat station file for hypodd
+        utils.reformat_stainfo_hypodd(station_file, station_file_hypodd,informat='json-gamma',combine_net_sta=combine_net_sta) # type: ignore
+        print("Reformatted station file for hypodd: "+station_file_hypodd)
+
+        # reformat phase file for hypodd
+        if input_type == "gamma":
+            print("Using GAMMA picks and catalog as input for HypoDD.")
+            """
+            Reformat phase data. From GAMMA picks (after cleaning) and HypoInverse good catalog. Since the hypoinverse 
+            steps have cleaned up the picks and catalog with remapped evid. We will use the `evid_label_mapped` here 
+            and the cleaned picks and catalog.
+            """
+            if not skip_hypoinverse:
+                # Use the cleaned picks and hypoinverse good catalog
+                utils.convert_gamma2hypodd(out_hypoinv_good,cleaned_pickfile,outfile=phase_file_hypodd,
+                            combine_net_sta=combine_net_sta,qc=qc_phase,verbose=debug,
+                            evid_label=evid_label_mapped,mapping_evid=False,save_cleaned_data=False) # 
+            else:
+                # Use the raw picks and original event catalog
+                utils.convert_gamma2hypodd(event_file,phase_file_raw,outfile=phase_file_hypodd,
+                            combine_net_sta=combine_net_sta,qc=qc_phase,
+                            evid_label=evid_label,mapping_evid=mapping_evid,evid_label_mapped=evid_label_mapped,
+                            save_cleaned_data=save_cleaned_data,verbose=debug) #
+        elif input_type == "hypoinv":
+            #converting hypoinverse phase file to hypodd format
+            print("Using existing HypoInverse phase file as input for HypoDD.")
+            utils.convert_hypoinverse2hypodd(phase_file_raw,outfile=phase_file_hypodd,verbose=debug) #
+        else:
+            raise NotImplementedError(f"Input type '{input_type}' not yet implemented for HypoDD.")
+            
+        """
+        Driver to run HypoDD via the HypoDDCore module
+        Major parameters to run the code are carried through with a container class named `HypoDDCore.HypoDDConfig()`. 
+        This class is simplified from the `config()` class in `HypoDD-Interface-Py`. In `HypoXPy`, I also reduced the number 
+        of metadata/parameters, to focus only on required key parameters.
+        """
+        hypodd_handle = HypoDDCore.HypoDDConfig(binpath=binpath,indir=indir,outdir=outdir,namebase=namebase,
+                        station_file=station_file_hypodd,phase_file=phase_file_hypodd,
+                        hypodd_inp_template=template_hypodd,ph2dt_inp_template=template_ph2dt)
+        if debug: print(hypodd_handle)
+        
+        # -------------------------------
+        # hypoDD (core relocation)
+        # -------------------------------
+        print(f"Running hypoDD flow:")
+        hypodd_handle.run(verbose=verbose)
+
+        # Finalize hypoDD results. Collect outputs and save the final catalog.
+        hypodd_handle.finalize(out_catalog_file=out_hypodd_final,cleanup=cleanup)
+
+    print("Workflow completed.")
 

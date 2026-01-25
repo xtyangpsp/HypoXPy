@@ -9,6 +9,11 @@ import warnings
 from tqdm import tqdm
 from datetime import datetime
 #####
+def pick_vars(*names, scope):
+    """
+    Pick and pass variable names to dictionary items.
+    """
+    return {name: scope[name] for name in names}
 
 def basename_list():
     """
@@ -454,36 +459,84 @@ def format_pick_line_gamma2hypoinverse(pick, default_component=None): #gamma to 
     formatted pick line in Hypoinverse format.
     """
     try:
-        network_code, station_code, comp_code, channel_code = pick['id'].split('.')
+        net, sta, cha, comp = pick["id"].split(".")
     except ValueError:
-        warnings.warn(f"Pick ID format invalid: {pick['id']}")
+        warnings.warn(f"Invalid pick id: {pick['id']}")
         return None
 
-    if default_component and not comp_code:
+    if not comp and default_component:
+        comp = default_component
+
+    phase = str(pick["type"]).upper()
+    if phase not in ("P", "S"):
+        return None
+
+    network_code, station_code, comp_code, channel_code = pick['id'].split('.')
+    phase = pick['type']
+    phase_weight = min(max(int((1-pick['prob']) / (1 - 0.3) * 4) - 1, 0), 3)
+    picktime = datetime.strptime(pick["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
+    pickmin = picktime.strftime("%Y%m%d%H%M")
+    picksec = picktime.strftime("%S%f")[:-4]
+    phase_amplitude=pick['phase_amplitude']
+
+    if default_component is not None and len(comp_code)<1:
         comp_code = default_component
 
-    phase = pick['type'].upper()
-    weight = min(max(int((1 - pick['prob']) / (1 - 0.3) * 4) - 1, 0), 3)
-    pick_time = datetime.strptime(pick["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
-    pick_min = pick_time.strftime("%Y%m%d%H%M")
-    pick_sec = pick_time.strftime("%S%f")[:-4]
-    amp = pick.get('phase_amplitude', 0)
-
     templine = f"{station_code:<5}{network_code:<2}  {channel_code:<2}{comp_code:<1}"
-
-    if phase == 'P':
-        return f"{templine:<13} P {weight:<1d}{pick_min} {pick_sec}                    {amp:<7}"
-    elif phase == 'S':
-        return f"{templine:<13}   4{pick_min} {'':<12}{pick_sec} S {weight:<1d}    {amp:7f}"
+    
+    if phase.upper() == 'P':
+        pick_line = f"{templine:<13} P {phase_weight:<1d}{pickmin} {picksec}                    {phase_amplitude:<7}"
+    elif phase.upper() == "S":
+        pick_line = f"{templine:<13}   4{pickmin} {'':<12}{picksec} S {phase_weight:<1d}    {phase_amplitude:7f}"
     else:
-        warnings.warn(f"Unknown phase type: {phase}")
+        warnings.warn("Phase Type Error: "+phase.upper())
         return None
+    
+    return pick_line
 
-def convert_gamma2hypoinverse(eventfile, pickfile, outfile='phase_output.phs',
-                  qc=False, separator=',', default_component=None, verbose=False,evid_label="event_id",
-                         mapping_evid=True,evid_label_mapped=None,save_cleaned_data=False, cleaned_eventfile=None, cleaned_pickfile=None):
+#
+def format_event_line_hypoinverse(ev, evid, evdep_label, evdep_scale):
     """
-    Converts GaMMA event and pick files to Hypoinverse phase file format.
+    Format a HYPOINVERSE event header line (fixed-width), HYPOINVERSE ARCHIVE-2000 FILE, NO SHADOWS.
+    Magnitude is set to 0.0 to avoid negative magnitude issues, which caurse HYPOINVERSE to fail due to length restriction.
+    """
+    fixmag = True  # force magnitude to 0.0 to avoid negative magnitude issues.
+    if fixmag:
+        mag = 0.0
+    else:
+        mag = ev.get("magnitude", 0.0)
+    # get event parameters 
+
+    ot = ev["time"]
+
+    lat = ev["latitude"]
+    lon = ev["longitude"]
+    depth = ev[evdep_label] * evdep_scale
+    
+    # ---- Latitude ----
+    south = "S" if lat < 0 else " "
+    lat = abs(lat)
+    lat_degree = int(lat)
+    lat_minute = (lat - lat_degree) * 60 * 100
+
+    # ---- Longitude ----
+    west = "W" if lon < 0 else " "
+    lon = abs(lon)
+    lon_degree = int(lon)
+    lon_minute = (lon - lon_degree) * 60 * 100
+
+    event_time = datetime.strptime(ot, "%Y-%m-%dT%H:%M:%S.%f").strftime("%Y%m%d%H%M%S%f")[:-4]
+
+    event_line = f"{event_time}{abs(lat_degree):2d}{south}{abs(lat_minute):4.0f}{abs(lon_degree):3d}{west}{abs(lon_minute):4.0f}{depth:5.0f}" 
+    event_final = event_line + f"{mag:3.1f}{' ':97}{evid:10}"
+
+    return event_final
+####
+def convert_gamma2hypoinverse(eventfile,pickfile,outfile="phase_output.phs",qc=False,separator=",",default_component=None,
+    verbose=False,evid_label="event_id",mapping_evid=True,evid_label_mapped=None,save_cleaned_data=False,cleaned_eventfile=None,
+    cleaned_pickfile=None):
+    """
+    Convert GAMMA event + pick CSV files to HYPOINVERSE phase format.
     ==========PARAMETERS=============
     eventfile: input event CSV file from GaMMA.
     pickfile: input pick CSV file from GaMMA.
@@ -503,92 +556,72 @@ def convert_gamma2hypoinverse(eventfile, pickfile, outfile='phase_output.phs',
     ==========RETURN=============
     None
     """
-    
-    # Read input
     events = pd.read_csv(eventfile, sep=separator)
     picks = pd.read_csv(pickfile, sep=separator)
-    evdep_label,evdep_scale=resolve_event_depth_column(events)
-    #remove rows with event_idx negative. These are invalid picks/events.
+
+    evdep_label, evdep_scale = resolve_event_depth_column(events)
+
     if "event_idx" in picks.columns:
         picks = picks[picks["event_idx"] >= 0]
-
     if "event_index" in events.columns:
         events = events[events["event_index"] >= 0]
 
-    # Clean columns
     picks = picks.loc[:, ~picks.columns.duplicated()]
+
+    # ---- remap event IDs ----
     if mapping_evid:
         save_cleaned_data = True
-        # remap event IDs to integers to be compatible with HypoDD
-        unique_evids = events[evid_label].unique()
-        evid_map = {evid: idx + 1 for idx, evid in enumerate(unique_evids)} # start from 1 for HypoDD compatibility
-
-        # add a new column for mapped event IDs
         if evid_label_mapped is None:
             evid_label_mapped = evid_label + "_mapped"
-        #apply mapping
+
+        evid_map = {
+            evid: i + 1 for i, evid in enumerate(events[evid_label].unique())
+        }
         events[evid_label_mapped] = events[evid_label].map(evid_map)
         picks[evid_label_mapped] = picks[evid_label].map(evid_map)
     else:
         evid_label_mapped = evid_label
 
     if save_cleaned_data:
-        # Save cleaned event and pick data
-        if cleaned_eventfile is None:
-            cleaned_eventfile = os.path.splitext(eventfile)[0] + "_cleaned.csv"
-        if cleaned_pickfile is None:
-            cleaned_pickfile = os.path.splitext(pickfile)[0] + "_cleaned.csv"
+        cleaned_eventfile = cleaned_eventfile or eventfile.replace(".csv", "_cleaned.csv")
+        cleaned_pickfile = cleaned_pickfile or pickfile.replace(".csv", "_cleaned.csv")
         events.to_csv(cleaned_eventfile, index=False)
         picks.to_csv(cleaned_pickfile, index=False)
-        print(f"Cleaned event data saved to {cleaned_eventfile}")
-        print(f"Cleaned pick data saved to {cleaned_pickfile}")
-    # Group picks by event
+
     picks_by_event = picks.groupby(evid_label_mapped)
 
     with open(outfile, "w") as f:
-        #loop over events
-        for event in tqdm(events.to_dict(orient="records"), desc="Converting GAMMA to HypoDD phase file"):
-            evid = event[evid_label_mapped]
+        for _, ev in tqdm(events.iterrows(), total=len(events),desc='Converting GaMMA to HYPOINVERSE phase file'):
+            evid = ev[evid_label_mapped]
             if evid not in picks_by_event.groups:
                 continue
-            """
-            Formats a single event line for Hypoinverse phase file.
-            Keeps event ID and magnitude.
-            """
-            event_time = datetime.strptime(event["time"], "%Y-%m-%dT%H:%M:%S.%f")
-            lat_deg = int(event["latitude"])
-            lon_deg = int(event["longitude"])
-            lat_min = (abs(event["latitude"]) - abs(lat_deg)) * 60 * 100
-            lon_min = (abs(event["longitude"]) - abs(lon_deg)) * 60 * 100
-            south = "S" if event["latitude"] < 0 else " "
-            east = "E" if event["longitude"] >= 0 else " "
-            depth = event[evdep_label]*evdep_scale
-            mag = event["magnitude"]
 
-            lines = [(f"{event_time.strftime('%Y%m%d%H%M%S%f')[:-4]}"
-                    f"{abs(lat_deg):2d}{south}{abs(lat_min):4.0f}"
-                    f"{abs(lon_deg):3d}{east}{abs(lon_min):4.0f}"
-                    f"{depth:5.0f}{mag:3.1f}{' ':97}{evid:10}\n")]
-            
+            header = format_event_line_hypoinverse(
+                ev, evid, evdep_label, evdep_scale
+            )
+
+            phase_lines = []
             has_p = has_s = False
 
-            # Get picks for this event
-            for _, pick in picks_by_event.get_group(evid).iterrows():
-                pick_line = format_pick_line_gamma2hypoinverse(pick, default_component)
-                if pick_line:
-                    lines.append(pick_line + "\n")
-                    phase_type = pick['type'].upper()
-                    if phase_type == 'P': has_p = True
-                    elif phase_type == 'S': has_s = True
+            for _, pk in picks_by_event.get_group(evid).iterrows():
+                line = format_pick_line_gamma2hypoinverse(pk, default_component)
+                if line is None:
+                    continue
+                phase_lines.append(line + "\n")
+                if pk["type"].upper() == "P":
+                    has_p = True
+                elif pk["type"].upper() == "S":
+                    has_s = True
 
-            # Write lines if QC passes
-            if not qc or (has_p and has_s):
-                f.writelines(lines)
-                f.write("\n")
-                if verbose:
-                    print(f"Event {event[evid_label_mapped]} saved with {len(lines)-1} picks.")
-            elif verbose:
-                print(f"Event {event[evid_label_mapped]} skipped (QC failed).")
+            if qc and not (has_p and has_s):
+                continue
+
+            f.write(header+"\n")
+            f.writelines(phase_lines)
+            f.write("\n")
+
+    if verbose:
+        print(f"[DONE] HYPOINVERSE phase file written → {outfile}")
 ######### end of functions for GaMMA to Hypoinverse phase file conversion
 
 ######### functions for GaMMA to HypoDD phase file conversion
@@ -762,7 +795,104 @@ def convert_gamma2hypodd(eventfile,pickfile,outfile="hypodd.phase",separator=","
             elif verbose:
                 print(f"Event {evid} skipped (QC failed)")
 ##### end of functions for GaMMA to HypoDD phase file conversion
+def convert_hypoinverse2hypodd(phase_file_in,phase_file_out, verbose=False):
+    """
+    Reformat input hypoinverse phase file for HypoDD run.
 
+    Parameters
+    ----------
+    phase_file_in : str
+        Input phase file path.
+    phase_file_out : str
+        Output phase file path.
+    verbose : bool
+        If True, print progress messages. Default is False.    
+
+    Returns
+    -------
+    None
+    """
+    #this is a untested function. Use with caution.
+    # print warning message here
+    if verbose:
+        print("[WARNING] convert_hypoinverse2hypodd() is untested. Use with caution.")
+    fout_dir = os.path.split(phase_file_out)[0]
+    os.makedirs(fout_dir, exist_ok=True)
+
+
+    evid_list = []
+
+    # --------------------------------------------------
+    # Read original phase file
+    # --------------------------------------------------
+    with open(phase_file_in) as f:
+        lines = f.readlines()
+
+    with open(phase_file_out, 'w') as fout:
+        for line in lines:
+            codes = line.strip().split(',')
+
+            # ------------------------------------------
+            # Event header line
+            # ------------------------------------------
+            if len(codes[0]) >= 14:
+                ot = UTCDateTime(codes[0])
+                lat, lon, dep, mag = [float(code) for code in codes[1:5]]
+                evid = int(codes[-1])
+
+                write_event = True
+                evid_list.append(evid)
+
+                # Format time
+                date = '{:4} {:2} {:2}'.format(ot.year, ot.month, ot.day)
+                time = '{:2} {:2} {:5.2f}'.format(
+                    ot.hour, ot.minute, ot.second + ot.microsecond / 1e6
+                )
+
+                # Format location
+                loc = '{:7.4f} {:9.4f}  {:6.2f} {:4.2f}'.format(
+                    lat, lon, dep, mag
+                )
+
+                fout.write(
+                    '# {} {}  {}  0.00  0.00  0.00  {:>9}\n'.format(
+                        date, time, loc, evid
+                    )
+                )
+
+            # ------------------------------------------
+            # Station pick lines
+            # ------------------------------------------
+            else:
+                if not write_event:
+                    continue
+
+                netsta = codes[0].strip()
+                wp, ws = 1.0, 1.0
+
+                # P pick
+                if codes[1] != '-1':
+                    tp = UTCDateTime(codes[1])
+                    ttp = tp - ot
+                    fout.write(
+                        '{:<7}{}{:6.3f}  {:6.3f}   P\n'.format(
+                            netsta, ' ' * 6, ttp, wp
+                        )
+                    )
+
+                # S pick
+                if codes[2] != '-1':
+                    ts = UTCDateTime(codes[2])
+                    tts = ts - ot
+                    fout.write(
+                        '{:<7}{}{:6.3f}  {:6.3f}   S\n'.format(
+                            netsta, ' ' * 6, tts, ws
+                        )
+                    )
+
+    # --------------------------------------------------
+    print(f"[INFO] Wrote single phase file: {phase_file_out}")
+    print(f"[INFO] Number of events: {len(evid_list)}")
 #
 def convert_legacyphase2hypodd(phase_file_in,phase_file_out, dep_corr=5,
                        time_range=None,lat_range=None,lon_range=None):

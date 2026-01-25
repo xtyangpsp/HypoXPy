@@ -36,8 +36,12 @@ def run_ph2dt(config,verbose=True):
     fout = open(ph2dt_inp,'w')
     f=open(config.ph2dt_inp_template); lines=f.readlines(); f.close()
     for line in lines:
-        if 'input/phase.dat' in line: line = '%s \n'%(config.phase_file)
-        if 'input/station.dat' in line: line = '%s \n'%(config.station_file)
+        #skip lines starting with "*"
+        if line[0] == "*":
+            pass
+        else:
+            if 'input/phase.dat' in line: line = '%s \n'%(config.phase_file)
+            if 'input/station.dat' in line: line = '%s \n'%(config.station_file)
         fout.write(line)
     fout.close()
     # --------------------------------------------------
@@ -316,16 +320,20 @@ class HypoDDConfig(object):
         fout = open(f'{self.indir}/hypoDD_{self.namebase}.inp','w')
         f=open(self.hypodd_inp_template); lines=f.readlines(); f.close()
         for line in lines:
-            if 'dt.ct' in line: line = f'{self.indir}/dt.ct \n'
-            if 'dt.cc' in line: line = f'{self.indir}/dt.cc \n'  #
-            if 'event.dat' in line: line = f'{self.indir}/event.dat \n'
-            if 'station.dat' in line: line = f'{self.station_file} \n'
+            #skip lines starting with *
+            if line[0] == "*":
+                pass
+            else:
+                if 'dt.ct' in line: line = f'{self.indir}/dt.ct \n'
+                if 'dt.cc' in line: line = f'{self.indir}/dt.cc \n'  #
+                if 'event.dat' in line: line = f'{self.indir}/event.dat \n'
+                if 'station.dat' in line: line = f'{self.station_file} \n'
 
-            if 'hypoDD.reloc' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.reloc \n'
-            if 'hypoDD.loc' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.loc \n'
-            if 'hypoDD.sta' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.sta \n'
-            if 'hypoDD.res' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.res \n'
-            if 'hypoDD.src' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.src \n'
+                if 'hypoDD.reloc' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.reloc \n'
+                if 'hypoDD.loc' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.loc \n'
+                if 'hypoDD.sta' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.sta \n'
+                if 'hypoDD.res' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.res \n'
+                if 'hypoDD.src' in line: line = f'{self.outdir}/hypoDD_{self.namebase}.src \n'
             
             fout.write(line)
         fout.close()
