@@ -294,10 +294,10 @@ class HypoDDConfig(object):
                 f'{self.indir}/event.dat',
                 f'{self.indir}/dt.ct',
                 f'{self.outdir}/{self.namebase}.ph2dt',
-                f'{self.outdir}/hypoDD.loc',
-                f'{self.outdir}/hypoDD.res',
-                f'{self.outdir}/hypoDD.sta',
-                f'{self.outdir}/hypoDD.src',
+                f'{self.outdir}/hypoDD_{self.namebase}.loc',
+                f'{self.outdir}/hypoDD_{self.namebase}.res',
+                f'{self.outdir}/hypoDD_{self.namebase}.sta',
+                f'{self.outdir}/hypoDD_{self.namebase}.src',
             ]
             for f in files_to_remove:
                 if os.path.exists(f):

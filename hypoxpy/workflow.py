@@ -27,6 +27,7 @@ or hazard-critical use without independent verification.
 from hypoxpy import utils
 from hypoxpy import HypoInvCore
 from hypoxpy import HypoDDCore
+import warnings
 #
 def sanity_check(config,skip_hypoinverse=False,skip_hypodd=False):
     """
@@ -47,7 +48,7 @@ def sanity_check(config,skip_hypoinverse=False,skip_hypodd=False):
             raise KeyError(f"Missing '{hypodd_key}' section in config")
 
 def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma",
-             verbose=False,debug=False):
+             verbose=False,debug=False,allow_skip_hypoinverse=False):
     """
     End-to-end earthquake relocation workflow.
 
@@ -61,6 +62,12 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
         event ID handling, file paths, and parameters for HYPOINVERSE and HYPODD.
     skip_hypoinverse : bool, optional
         If True, skip the HYPOINVERSE absolute location step. Default is False.
+    allow_skip_hypoinverse : bool, optional
+        If True, allow skipping HYPOINVERSE even if HYPODD is to be run.
+        Default is False. If both skip_hypoinverse and skip_hypodd are True,
+        an error is raised. This is a second layer of protection to prevent
+        users from skipping the hypoinverse step when running with 'gamma' input type.
+        User could set this to True only if they are fully aware of the implications.
     skip_hypodd : bool, optional
         If True, skip the HYPODD relative relocation step. Default is False.
     input_type : str
@@ -87,6 +94,17 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     if skip_hypoinverse and skip_hypodd:
         raise ValueError("Both skip_hypoinverse and skip_hypodd cannot be True simultaneously.")
 
+    #
+    if skip_hypoinverse and not allow_skip_hypoinverse and input_type == "gamma":
+        raise ValueError("Skipping hypoinverse is not allowed when input_type is 'gamma' unless allow_skip_hypoinverse is set to True.")
+
+    if skip_hypoinverse and allow_skip_hypoinverse:
+        # Warn user about potential issues
+        print("!!! Warning: You have chosen to skip hypoinverse with 'gamma' input type. This is strongly discouraged and may lead to poor relocation results.")
+        warnings.warn("Skipping hypoinverse with 'gamma' input type may lead to poor relocation results.",
+            UserWarning,
+            stacklevel=2
+        )
     # Perform sanity checks on config
     sanity_check(config,skip_hypoinverse=skip_hypoinverse,skip_hypodd=skip_hypodd)
 
