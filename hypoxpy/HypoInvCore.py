@@ -155,11 +155,10 @@ class HypoInvConfig(object):
     =============================
     """
     def __init__(self,binpath=None,indir='input',outdir='output',phase_file=None,station_file=None,pmodel=None,
-                 smodel=None,poisson=1.73,
-               namebase='hyp',hypoinv_bin='hyp1.40',get_prt=False,get_arc=False,
-               lat_code='N',lon_code='W',ref_ele=0.0,grd_ele=0.0,
-               ztrlist = np.arange(0,20,1),rms_weight='4 0.3 1 3',dist_initial = '1 50 1 2',
-               dist_weight = '4 20 1 3',weight_code='1 0.6 0.3 0.2',min_nsta=4):
+                 smodel=None,poisson=1.73,namebase='hyp',hypoinv_bin='hyp1.40',get_prt=False,get_arc=False,
+               lat_code='N',lon_code='W',ref_ele=0.0,grd_ele=0.0,ztrlist = np.arange(0,20,1),
+               rms_weight='4 0.3 1 3',dist_initial = '1 50 1 2',dist_weight = '4 20 1 3',
+               weight_code='1 0.6 0.3 0.2',min_nsta=4,template_parfile=None):
         self.type="HypoInvConfig object"
         if binpath is None:
             binpath = 'hyp1.40' # default path to hypoinverse binary, assuming it is in the system PATH
@@ -187,7 +186,11 @@ class HypoInvConfig(object):
         self.dist_initial = dist_initial
         self.dist_weight = dist_weight
         self.weight_code = weight_code
-        self.template_parfile = utils.get_template_list('hypoinv')[1]
+        if template_parfile is not None:
+            self.template_parfile = template_parfile
+        else:
+            self.template_parfile = utils.get_template_list('hypoinv')[1]
+            print(f"[INFO] Using built-in template parameter file: {self.template_parfile}")
         self.pmodel = pmodel #'input/velo_p_eg.cre'
         self.smodel = smodel #[None, 'input/velo_s_eg.cre'][1]
         self.poisson = poisson #1.73 # provide smod or pos
@@ -211,6 +214,7 @@ class HypoInvConfig(object):
             # Input files
             f"Phase file        : {self.phase_file}",
             f"Station file     : {self.station_file}",
+            f"Template parfile  : {self.template_parfile}",
             f"P velocity model : {self.pmodel}",
             f"S velocity model : {self.smodel}",
             f"Poisson ratio    : {self.poisson}",
@@ -240,6 +244,7 @@ class HypoInvConfig(object):
             f"HypoInvConfig("
             f"phase_file={self.phase_file}, "
             f"station_file={self.station_file}, "
+            f"template_parfile={self.template_parfile}, "
             f"pmodel={self.pmodel}, "
             f"smodel={self.smodel}, "
             f"outdir={self.outdir})"

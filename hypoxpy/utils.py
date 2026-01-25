@@ -8,6 +8,10 @@ from obspy import UTCDateTime
 import warnings
 from tqdm import tqdm
 from datetime import datetime
+import re
+
+####
+EVENT_TIME_RE = re.compile(r"^\d{16}")
 #####
 def pick_vars(*names, scope):
     """
@@ -795,6 +799,150 @@ def convert_gamma2hypodd(eventfile,pickfile,outfile="hypodd.phase",separator=","
             elif verbose:
                 print(f"Event {evid} skipped (QC failed)")
 ##### end of functions for GaMMA to HypoDD phase file conversion
+def classify_hypoinverse_line(line):
+    """
+    Classify a HYPOINVERSE archive line as 'event', 'pick', or 'unknown'.
+    """
+
+    line = line.rstrip("\n")
+
+    # ---- Event line: starts with YYYYMMDDHHMMSSff ----
+    if EVENT_TIME_RE.match(line):
+        return "event"
+
+    # ---- Pick line: station code + network + component ----
+    # Example: DOL  AV  BHZ
+    if (
+        len(line) >= 20
+        and line[0:5].strip().isalnum()
+        and line[5:7].strip().isalpha()
+        and (" P " in line or " S " in line)
+    ):
+        return "pick"
+
+    return "unknown"
+def unpack_pick_line_hypoinverse(pick_line):
+    """
+    Reverse of format_pick_line_gamma2hypoinverse.
+    Parse a Hypoinverse pick line into a pick dictionary.
+
+    Force phase weight to 1.0 for both P and S picks.
+    """
+
+    line = pick_line.rstrip("\n")
+
+    # ---- Station / network / channel / component ----
+    station = line[0:5].strip()
+    network = line[5:7].strip()
+    channel = line[9:11].strip()
+    component = line[11:12].strip()
+
+    # ---- Phase ----
+    phase1 = line[14].upper()
+    phase2 = line[47].upper()  # S phase indicator
+    if phase1 == "P":
+        phase = "P"
+        # ---- Time fields ----
+        # Example: 0202101031745
+        timestr = line[16:29].strip()
+        if len(timestr) != 13:
+            raise ValueError(f"Invalid pick time field: {timestr}")
+
+        # Drop leading flag (0 or 1)
+        ymdhm = timestr[1:]  # YYYYMMDDHHMM
+
+        # Seconds field: e.g. 2580 → 25.80 sec
+        sec_str = line[30:34].strip()
+        seconds = float(sec_str) / 100.0
+
+        base_time = datetime.strptime(ymdhm, "%Y%m%d%H%M")
+        picktime = base_time.replace(
+            second=int(seconds),
+            microsecond=int((seconds % 1) * 1e6)
+        )
+    elif phase2 == "S":
+        phase = "S"
+        # ---- Time fields ----
+        # Example: 0202101031745
+        timestr = line[16:29].strip()
+        if len(timestr) != 13:
+            raise ValueError(f"Invalid pick time field: {timestr}")
+
+        # Drop leading flag (0 or 1)
+        ymdhm = timestr[1:]  # YYYYMMDDHHMM
+
+        # Seconds field: e.g. 2580 → 25.80 sec
+        sec_str = line[42:46].strip()
+        seconds = float(sec_str) / 100.0
+
+        base_time = datetime.strptime(ymdhm, "%Y%m%d%H%M")
+        picktime = base_time.replace(
+            second=int(seconds),
+            microsecond=int((seconds % 1) * 1e6)
+        )
+    # ---- Amplitude ----
+    try:
+        amplitude = float(line.split()[-1])
+    except ValueError:
+        amplitude = 0.0
+
+    return {
+        "network": network,
+        "station": station,
+        "channel": channel,
+        "component": component,
+        "type": phase,
+        "timestamp": picktime.strftime("%Y-%m-%dT%H:%M:%S.%f"),
+        "phase_weight": 1.0,
+        "phase_amplitude": amplitude,
+    }
+def unpack_event_line_hypoinverse(event_line, evdep_scale=1.0):
+    """
+    Reverse of format_event_line_hypoinverse.
+    Parse a HYPOINVERSE fixed-width event header line and
+    return a dictionary of earthquake parameters.
+    """
+
+    # ---- Time ----
+    time_str = event_line[0:16]  # YYYYMMDDHHMMSSff
+    ot = datetime.strptime(time_str, "%Y%m%d%H%M%S%f")
+    ot_iso = ot.strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+    # ---- Latitude ----
+    lat_degree = int(event_line[16:18])
+    south_flag = event_line[18]
+    lat_minute = int(event_line[19:23]) / 100.0  # undo ×100
+    latitude = lat_degree + lat_minute / 60.0
+    if south_flag == "S":
+        latitude *= -1.0
+
+    # ---- Longitude ----
+    lon_degree = int(event_line[23:26])
+    west_flag = event_line[26]
+    lon_minute = int(event_line[27:31]) / 100.0  # undo ×100
+    longitude = lon_degree + lon_minute / 60.0
+    if west_flag == "W":
+        longitude *= -1.0
+
+    # ---- Depth ----
+    depth_raw = float(event_line[31:36])
+    depth = depth_raw / evdep_scale
+
+    # ---- Magnitude ----
+    magnitude = float(event_line[36:39])
+
+    # ---- Event ID ----
+    evid = event_line[136:146].strip()
+
+    return {
+        "time": ot_iso,
+        "latitude": latitude,
+        "longitude": longitude,
+        "depth": depth,
+        "magnitude": magnitude,
+        "evid": evid,
+    }
+
 def convert_hypoinverse2hypodd(phase_file_in,phase_file_out, verbose=False):
     """
     Reformat input hypoinverse phase file for HypoDD run.
@@ -812,10 +960,7 @@ def convert_hypoinverse2hypodd(phase_file_in,phase_file_out, verbose=False):
     -------
     None
     """
-    #this is a untested function. Use with caution.
-    # print warning message here
-    if verbose:
-        print("[WARNING] convert_hypoinverse2hypodd() is untested. Use with caution.")
+
     fout_dir = os.path.split(phase_file_out)[0]
     os.makedirs(fout_dir, exist_ok=True)
 
@@ -830,17 +975,25 @@ def convert_hypoinverse2hypodd(phase_file_in,phase_file_out, verbose=False):
 
     with open(phase_file_out, 'w') as fout:
         for line in lines:
-            codes = line.strip().split(',')
-
-            # ------------------------------------------
-            # Event header line
-            # ------------------------------------------
-            if len(codes[0]) >= 14:
-                ot = UTCDateTime(codes[0])
-                lat, lon, dep, mag = [float(code) for code in codes[1:5]]
-                evid = int(codes[-1])
-
+            # check empty line
+            if line.strip() == '':
+                continue
+            #
+            linetype = classify_hypoinverse_line(line)
+            if linetype == 'unknown':
+                write_event = False
+                continue
+            elif linetype == 'event':
+                # Event line
+                evdict = unpack_event_line_hypoinverse(line, evdep_scale=1.0)
+                ot = UTCDateTime(evdict['time'])
+                lat = evdict['latitude']
+                lon = evdict['longitude']
+                dep = evdict['depth']
+                mag = evdict['magnitude']
+                evid = int(evdict['evid'])
                 write_event = True
+
                 evid_list.append(evid)
 
                 # Format time
@@ -859,36 +1012,24 @@ def convert_hypoinverse2hypodd(phase_file_in,phase_file_out, verbose=False):
                         date, time, loc, evid
                     )
                 )
-
-            # ------------------------------------------
-            # Station pick lines
-            # ------------------------------------------
-            else:
+            
+            elif linetype == 'pick':
                 if not write_event:
-                    continue
-
-                netsta = codes[0].strip()
-                wp, ws = 1.0, 1.0
-
+                    continue  # Skip picks if no valid event header has been written
+                pickdict = unpack_pick_line_hypoinverse(line)
+                netsta = pickdict['network'] + '.' + pickdict['station']
+                
                 # P pick
-                if codes[1] != '-1':
-                    tp = UTCDateTime(codes[1])
-                    ttp = tp - ot
-                    fout.write(
-                        '{:<7}{}{:6.3f}  {:6.3f}   P\n'.format(
-                            netsta, ' ' * 6, ttp, wp
-                        )
+                phase_type = pickdict['type']
+                phase_time = pickdict['timestamp']
+                phase_weight = pickdict['phase_weight']
+                tphase = UTCDateTime(phase_time)
+                ttphase = tphase - ot
+                fout.write(
+                    '{:<7}{}{:6.3f}  {:6.3f}   {:s}\n'.format(
+                        netsta, ' ' * 6, ttphase, phase_weight, phase_type
                     )
-
-                # S pick
-                if codes[2] != '-1':
-                    ts = UTCDateTime(codes[2])
-                    tts = ts - ot
-                    fout.write(
-                        '{:<7}{}{:6.3f}  {:6.3f}   S\n'.format(
-                            netsta, ' ' * 6, tts, ws
-                        )
-                    )
+                )
 
     # --------------------------------------------------
     print(f"[INFO] Wrote single phase file: {phase_file_out}")

@@ -88,7 +88,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     if input_type != "gamma":
         raise NotImplementedError(f"Input type '{input_type}' not yet implemented.")
     
-    print("Main driver of running the workflow.")
+    print("-> Sanity check before running the workflow.")
 
     #sanity check for the main running boolean flags
     if skip_hypoinverse and skip_hypodd:
@@ -160,6 +160,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     # --------------------
     if not skip_hypoinverse:
         hypoinv = config["hypoinverse"]
+        template_hypoinv = hypoinv["hypoinv_template"]
         pmodel      = hypoinv["p_model"]
         smodel      = hypoinv["s_model"]
         depth_list  = hypoinv["depth_list"]
@@ -178,6 +179,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     Perform hypoinverse
     """
     if not skip_hypoinverse:
+        print("-> Running hypoinverse flow:")
         # Reformat station file for hypoinverse
         utils.reformat_stainfo_hypoinverse(station_file,station_file_hypoinv,informat='json-gamma',ignore_component=False)
         print("Reformatted station file for hypoinverse: "+station_file_hypoinv)
@@ -218,7 +220,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
         """
         hypoinv_handle = HypoInvCore.HypoInvConfig(binpath=binpath,indir=indir,outdir=outdir,phase_file=phase_file_hypoinv,
                                            station_file=station_file_hypoinv,pmodel=pmodel,smodel=smodel,min_nsta=min_nsta,
-                                           namebase=namebase,ztrlist=depth_list)
+                                           namebase=namebase,ztrlist=depth_list,template_parfile=template_hypoinv)
         #print handle parameters for checking
         if debug: print(hypoinv_handle)
 
@@ -240,7 +242,11 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
         hypoinv_handle.finalize(mag_dict=cleaned_eventfile,evid_label=evid_label_mapped,
                             cleanup=cleanup,out_good=out_hypoinv_good,out_bad=out_hypoinv_bad)
 
+    """
+    Perform hypodd
+    """
     if not skip_hypodd:
+        print("-> Running hypodd flow:")
         # Reformat station file for hypodd
         utils.reformat_stainfo_hypodd(station_file, station_file_hypodd,informat='json-gamma',combine_net_sta=combine_net_sta) # type: ignore
         print("Reformatted station file for hypodd: "+station_file_hypodd)
@@ -279,7 +285,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
         """
         hypodd_handle = HypoDDCore.HypoDDConfig(binpath=binpath,indir=indir,outdir=outdir,namebase=namebase,
                         station_file=station_file_hypodd,phase_file=phase_file_hypodd,
-                        hypodd_inp_template=template_hypodd,ph2dt_inp_template=template_ph2dt)
+                        hypodd_inp_template=template_hypodd,ph2dt_inp_template=template_ph2dt,dep_corr=dep_corr)
         if debug: print(hypodd_handle)
         
         # -------------------------------
@@ -291,5 +297,6 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
         # Finalize hypoDD results. Collect outputs and save the final catalog.
         hypodd_handle.finalize(out_catalog_file=out_hypodd_final,cleanup=cleanup)
 
+    ### Final message
     print("Workflow completed.")
 
