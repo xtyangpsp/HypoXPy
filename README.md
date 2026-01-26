@@ -51,8 +51,8 @@ $ python -m ipykernel install --user --name=hypox
 
 ## Workflow and examples
 1. The relocation/location workflow is driven by `hypoxpy.workflow.relocate()`, which is a high-level wrapper for lower level relocaiton modules. The user could also call individual modules. However, using the `relocate()` wrapper is highly recommended. This package takes multiple types of phase data as the input. Users could choose to all or a subset of the relocaiton methods. **However, for GAMMA input, HYPOINVERSE is the recommended and default preprocessing step before HYPODD.**
-2. Please run the jupyter notebooks in the `example` folder after successfully installing the package.
-3. Below is the flowchart of the `relocate()` driver.
+2. Please run the jupyter notebooks in the `example/run_HypoXPy_workflow.ipynb` folder after successfully installing the package.
+3. Below is the flowchart of the `hypoxpy.workflow.relocate()` driver.
    
                            ┌──────────────┐
                            │  relocate()  │
