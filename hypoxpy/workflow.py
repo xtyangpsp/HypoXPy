@@ -112,6 +112,8 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     # Paths
     # --------------------
     paths = config["paths"]
+    if "binpath" not in paths.keys():
+        paths["binpath"] = None  # Use default binary path if not specified
     binpath  = paths["binpath"]
     indir    = paths["indir"]
     outdir   = paths["outdir"]

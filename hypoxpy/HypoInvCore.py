@@ -1,7 +1,7 @@
 #This module contains core functions for running HypoInverse interface.
 #Import needed packages first.
 import pandas as pd
-import os,glob
+import os,glob,shutil
 import numpy as np
 from hypoxpy import utils
 import subprocess
@@ -161,7 +161,10 @@ class HypoInvConfig(object):
                weight_code='1 0.6 0.3 0.2',min_nsta=4,template_parfile=None):
         self.type="HypoInvConfig object"
         if binpath is None:
-            binpath = 'hyp1.40' # default path to hypoinverse binary, assuming it is in the system PATH
+            HYPBIN = shutil.which("hyp1.40")
+            if HYPBIN is None:
+                raise RuntimeError("hyp1.40 not found in PATH")
+            binpath = HYPBIN # default path to hypoinverse binary, assuming it is in the system PATH
         self.binpath = os.path.join(binpath,'hyp1.40') #hard-coded hypoinverse program. 
         self.indir = indir
         self.outdir = outdir

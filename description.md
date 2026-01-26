@@ -8,13 +8,13 @@ A modularized comprehensive *Python* interface for hypocenter location codes
 * example: contains example scripts and jupyter notebooks running the hypoxpy workflow to relocate earthquakes.
 * figs: contains figures used in this README file.
 * hypoxpy: contains modules and templates of parameter files running hypoinverse and hypodd
-* src: contains source codes for the earthquake lcoation/relocation methods.
+* external: contains source codes for the earthquake lcoation/relocation methods.
 
 ## Installation
 ### Methods supported: 
-* HypoInverse: HypoInverse earthquake location/relocation package. You can download the version from the USGS website (https://www.usgs.gov/software/hypoinverse-earthquake-location). For your convenience, a copy of the hyp1.40 codes is available under the folder `src/hypoinverse1.40`. This method is labeled as `hypoinverse` in our package.
+* HypoInverse: HypoInverse earthquake location/relocation package. You can download the version from the USGS website (https://www.usgs.gov/software/hypoinverse-earthquake-location). For your convenience, a copy of the hyp1.40 codes is available under the folder `external/hypoinverse1.40`. This method is labeled as `hypoinverse` in our package.
 
-* HypoDD: earthquake relocation using the double-difference method. developed by Felix Waldhauser. See information on the references at the end of the Readme. A copy of the version (2.1) is included in `src/hypodd2.1`, after debugging some variable types from the version on https://github.com/fwaldhauser/HypoDD. This method is labeled as `hypodd` in our package.
+* HypoDD: earthquake relocation using the double-difference method. developed by Felix Waldhauser. See information on the references at the end of the Readme. A copy of the version (2.1) is included in `external/hypodd2.1`, after debugging some variable types from the version on https://github.com/fwaldhauser/HypoDD. This method is labeled as `hypodd` in our package.
 
 To use each included method, please make sure the corresponding packages are installed and working. Follow the related instructions to install each individual package.
  

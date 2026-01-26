@@ -152,8 +152,15 @@ class HypoDDConfig(object):
         # i/o paths
         # phase_file: needs to be the file after reformatted to be used by ph2dt and hypoDD.
         if binpath is None:
-            self.bin_hypodd = 'hypoDD' # default path to hypoDD binaries, assuming it is in the system PATH
-            self.bin_ph2dt = 'ph2dt'
+            HYPODD = shutil.which("hypoDD")
+            if HYPODD is None:
+                raise RuntimeError("hypoDD not found in PATH")
+            self.bin_hypodd = HYPODD # default path to hypoDD binaries, assuming it is in the system PATH
+
+            PH2DT = shutil.which("ph2dt")
+            if PH2DT is None:
+                raise RuntimeError("ph2dt not found in PATH")
+            self.bin_ph2dt = PH2DT
         else:
             self.bin_hypodd = os.path.join(binpath,'hypoDD')
             self.bin_ph2dt = os.path.join(binpath,'ph2dt')
