@@ -49,8 +49,48 @@ $ pip install --user ipykernel
 $ python -m ipykernel install --user --name=hypox
 ```
 
-## Examples
-Please run the jupyter notebooks in the `example` folder after successfully installing the package.
+## Workflow and examples
+1. The relocation/location workflow is driven by `hypoxpy.workflow.relocate()`, which is a high-level wrapper for lower level relocaiton modules. The user could also call individual modules. However, using the `relocate()` wrapper is highly recommended. This package takes multiple types of phase data as the input. Users could choose to all or a subset of the relocaiton methods. **However, for GAMMA input, HYPOINVERSE is the recommended and default preprocessing step before HYPODD.**
+2. Please run the jupyter notebooks in the `example` folder after successfully installing the package.
+3. Below is the flowchart of the `relocate()` driver.
+   
+                           ┌──────────────┐
+                           │  relocate()  │
+                           └───────┬──────┘
+                                   │
+                                   v
+                        ┌──────────────────────┐
+                        │    Sanity checks     │
+                        │ (flags + input_type) │
+                        └──────────┬───────────┘
+                                   │
+                                   v
+                        ┌──────────────────────┐
+                        │     Input type       │
+                        │ gamma | hypoinv      │
+                        └──────────┬───────────┘
+                                   │
+                                   v
+                     ┌────────────────────────────┐
+                     │        HypoInverse         │
+                     │ - convert / use phases     │
+                     │ - absolute locations       │
+                     │ (optional, but recommended)│
+                     └─────────────┬──────────────┘
+                                   │
+                                   v
+                        ┌──────────────────────┐
+                        │        HypoDD        │
+                        │ - relative relocation│
+                        └──────────┬───────────┘
+                                   │
+                                   v
+                        ┌──────────────────────┐
+                        │ Final relocated      │
+                        │ earthquake catalog   │
+                        └──────────────────────┘
+
+
 
 ## References:
 Klein, Fred W. 2002. User’s Guide to HYPOINVERSE-2000, a Fortran Program to Solve for Earthquake Locations and Magnitudes. https://doi.org/10.3133/ofr02171.
