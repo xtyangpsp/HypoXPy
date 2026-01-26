@@ -84,8 +84,8 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     if input_type not in valid_inputs:
         raise ValueError(f"Unknown input_type='{input_type}', choose from {valid_inputs}")
 
-    #only gamma input is currently supported
-    if input_type != "gamma":
+    #only gamma and hypoinv input is currently supported
+    if input_type != "gamma" and input_type != "hypoinv":
         raise NotImplementedError(f"Input type '{input_type}' not yet implemented.")
     
     print("-> Sanity check before running the workflow.")

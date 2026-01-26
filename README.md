@@ -6,6 +6,12 @@ A modularized comprehensive *Python* interface for hypocenter location codes
 ## Disclaimer
 *`hypoxpy`* is a research-oriented software package for improving earthquake locations and performing relative relocation using external location engines (e.g., HYPOINVERSE and HYPODD). It consumes phase picks and event catalogs produced by upstream tools (such as GAMMA or EQTransformer) but does not perform phase picking or event association itself. Results depend strongly on the quality of input picks, catalogs, velocity models, and parameter choices, and should be independently evaluated before scientific or operational use. This package doesn't intend to be a detailed documentation of each earthquake location method and code. The ultimate goal is to make this package a one-stop shop for earthquake location/relocation with a comprehensive collection of methods. The logic of this package is heavily inspired by, and modified and simplified from Hypo-Interface-Py (https://github.com/YijianZhou/Hypo-Interface-Py). We acknowledge the developers of Hypo-Interface-Py.
 
+## File structure
+* example: contains example scripts and jupyter notebooks running the hypoxpy workflow to relocate earthquakes.
+* figs: contains figures used in this README file.
+* hypoxpy: contains modules and templates of parameter files running hypoinverse and hypodd
+* src: contains source codes for the earthquake lcoation/relocation methods.
+
 ## Installation
 ### Methods supported: 
 * HypoInverse: HypoInverse earthquake location/relocation package. You can download the version from the USGS website (https://www.usgs.gov/software/hypoinverse-earthquake-location). For your convenience, a copy of the hyp1.40 codes is available under the folder `src/hypoinverse1.40`. This method is labeled as `hypoinverse` in our package.
@@ -42,6 +48,9 @@ $ pip install .
 $ pip install --user ipykernel
 $ python -m ipykernel install --user --name=hypox
 ```
+
+## Examples
+Please run the jupyter notebooks in the `example` folder after successfully installing the package.
 
 ## References:
 Klein, Fred W. 2002. User’s Guide to HYPOINVERSE-2000, a Fortran Program to Solve for Earthquake Locations and Magnitudes. https://doi.org/10.3133/ofr02171.
