@@ -130,7 +130,7 @@ class HypoDDConfig(object):
     phase_file : str
         Path to phase file (after reformatting for HypoDD).
     dep_corr : float
-        Depth correction to avoid air quakes. Default: 5 km.
+        Depth correction to avoid air quakes. Default: 0.0 km.
     hypodd_inp_template : str
         Template file for hypoDD input.inp
     ph2dt_inp_template : str
@@ -147,7 +147,7 @@ class HypoDDConfig(object):
     =============================
     """
     def __init__(self,binpath=None,indir='input',outdir='output',namebase=None,station_file=None, phase_file=None,
-               dep_corr = 5,hypodd_inp_template=None,ph2dt_inp_template=None):
+               dep_corr = 0.0,hypodd_inp_template=None,ph2dt_inp_template=None):
         self.type="HypoDDConfig object"
         # i/o paths
         # phase_file: needs to be the file after reformatted to be used by ph2dt and hypoDD.

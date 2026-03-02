@@ -173,7 +173,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     # --------------------
     if not skip_hypodd:
         hypodd = config["hypodd"]
-        #dep_corr          = hypodd["dep_corr"]
+        dep_corr          = hypodd["dep_corr"]
         template_ph2dt    = hypodd["ph2dt_template"]
         template_hypodd   = hypodd["hypodd_template"]
 
@@ -286,7 +286,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
         of metadata/parameters, to focus only on required key parameters.
         """
         hypodd_handle = HypoDDCore.HypoDDConfig(binpath=binpath,indir=indir,outdir=outdir,namebase=namebase,
-                        station_file=station_file_hypodd,phase_file=phase_file_hypodd,
+                        station_file=station_file_hypodd,phase_file=phase_file_hypodd,dep_corr=dep_corr,
                         hypodd_inp_template=template_hypodd,ph2dt_inp_template=template_ph2dt)
         if debug: print(hypodd_handle)
         
