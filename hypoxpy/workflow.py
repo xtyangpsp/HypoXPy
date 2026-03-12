@@ -108,6 +108,13 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     # Perform sanity checks on config
     sanity_check(config,skip_hypoinverse=skip_hypoinverse,skip_hypodd=skip_hypodd)
 
+    #set default values for optional parameters in config if not provided
+    ref_ele_default = 0.0
+    min_nsta_default = 4
+    combine_net_sta_default = True
+    dep_corr_default = 0.0 #depth correction for hypodd, default to 0.0 if not specified
+
+    mapping_evid_default = True # whether to re-assign event id counting from 1. This is important for the later steps to keep track of the events. Default to True if not specified in event_id section.
     # --------------------
     # Paths
     # --------------------
@@ -123,10 +130,14 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     # Preprocess controls
     # --------------------
     preprocess = config["preprocess"]
+    preprocess_keylist=list(preprocess.keys())
     save_cleaned_data = preprocess["save_cleaned_data"]
     cleaned_eventfile = preprocess["cleaned_eventfile"]
     cleaned_pickfile  = preprocess["cleaned_pickfile"]
-    combine_net_sta   = preprocess["combine_net_sta"]
+    if "combine_net_sta" in preprocess_keylist:
+        combine_net_sta = preprocess["combine_net_sta"]
+    else:
+        combine_net_sta = combine_net_sta_default # use the value from preprocess section if not specified in hypodd section
     cleanup           = preprocess["cleanup"]
     qc_phase          = preprocess["qc_phase"]
 
@@ -134,8 +145,12 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     # Event ID handling
     # --------------------
     event_id = config["event_id"]
+    event_id_keylist = list(event_id.keys())
     evid_label        = event_id["evid_label"]
-    mapping_evid      = event_id["mapping_evid"]
+    if "mapping_evid" in event_id_keylist:
+        mapping_evid      = event_id["mapping_evid"]
+    else:
+        mapping_evid      = mapping_evid_default
     evid_label_mapped = event_id["evid_label_mapped"]
 
     # --------------------
@@ -162,18 +177,32 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
     # --------------------
     if not skip_hypoinverse:
         hypoinv = config["hypoinverse"]
+        hypoinv_keylist=list(hypoinv.keys())
+
         template_hypoinv = hypoinv["hypoinv_template"]
         pmodel      = hypoinv["p_model"]
         smodel      = hypoinv["s_model"]
         depth_list  = hypoinv["depth_list"]
-        min_nsta    = hypoinv["min_nsta"]
+        if "min_nsta" in hypoinv_keylist:
+            min_nsta    = hypoinv["min_nsta"]
+        else:
+            min_nsta    = min_nsta_default # default minimum number of stations for hypoinverse
+        if "ref_ele" in hypoinv_keylist:
+            ref_ele    = hypoinv["ref_ele"]
+        else:
+            ref_ele    = ref_ele_default # default reference elevation for hypoinverse
 
     # --------------------
     # HypoDD params
     # --------------------
     if not skip_hypodd:
         hypodd = config["hypodd"]
-        dep_corr          = hypodd["dep_corr"]
+        hypodd_keylist=list(hypodd.keys())
+
+        if "dep_corr" in hypodd_keylist:
+            dep_corr          = hypodd["dep_corr"]
+        else:
+            dep_corr          = dep_corr_default # default depth correction for hypodd
         template_ph2dt    = hypodd["ph2dt_template"]
         template_hypodd   = hypodd["hypodd_template"]
 
@@ -222,7 +251,7 @@ def relocate(config,skip_hypoinverse=False,skip_hypodd=False, input_type="gamma"
         """
         hypoinv_handle = HypoInvCore.HypoInvConfig(binpath=binpath,indir=indir,outdir=outdir,phase_file=phase_file_hypoinv,
                                            station_file=station_file_hypoinv,pmodel=pmodel,smodel=smodel,min_nsta=min_nsta,
-                                           namebase=namebase,ztrlist=depth_list,template_parfile=template_hypoinv)
+                                           namebase=namebase,ztrlist=depth_list,template_parfile=template_hypoinv,ref_ele=ref_ele)
         #print handle parameters for checking
         if debug: print(hypoinv_handle)
 
